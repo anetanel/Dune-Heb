@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import heb_encode
+import split as heb_split
 
 UTILS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = UTILS_DIR.parent
@@ -52,9 +53,17 @@ def reverse_only(encoded_bytes):
     split.py's word-wrap/line-length padding logic applies, and no line
     break should be added beyond whatever \\r the translator explicitly
     placed in the source (already present in encoded_bytes from step 2).
+
+    Reversal happens at the unit level (utils/split.py's scan_units), not
+    per raw byte: multi-byte control tokens (location/quantity variables,
+    line-break variants) and literal digit runs must keep their internal
+    byte order even as their position within the line flips, since the
+    game's phrase engine reads their bytes in a fixed order.
     """
     lines = encoded_bytes.split(b"\n")
-    return b"\n".join(line[::-1] for line in lines)
+    return b"\n".join(
+        b"".join(reversed(heb_split.scan_units(line))) for line in lines
+    )
 
 
 def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=None):

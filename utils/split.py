@@ -33,6 +33,72 @@ LINE_LENGTH = 115
 DEFAULT_CHAR_WIDTH = 5
 TEST_LINE = "BNJ, ANF HJJBJX LKTFV AV EOX BESDX EAQUTJ... AHTV ESJOT PLFL LEHGJT AFVNF MHFLJV."
 
+# Multi-byte control tokens (player-name/location/quantity substitution
+# variables, line-break variants -- see utils/heb_encode.py's tokenizer for
+# the canonical byte-level definitions) must never be split across a
+# word-wrap boundary, nor have their internal byte order reversed: the
+# game's phrase engine reads their bytes in a fixed order (e.g. opcode then
+# operand) regardless of the surrounding Hebrew text being stored
+# right-to-left. Ordered by descending length so a 3-byte match is tried
+# before the 2-byte prefixes that could also match its first two bytes.
+MULTI_BYTE_TOKENS = [
+    b"\x80\x00",  # matched below with one extra operand byte (3 bytes total)
+    b"\r\x06",
+    b"\r\x08",
+    b"\x91\x9d",
+    b"\x91",
+    b"\x92",
+]
+
+
+def scan_units(line):
+    """Split `line` into a list of byte-strings: each atomic control token
+    or digit run intact, everything else as single bytes."""
+    units = []
+    i = 0
+    n = len(line)
+    while i < n:
+        b = line[i]
+        if b == 0x80 and line[i + 1:i + 2] == b"\x00" and i + 2 < n:
+            units.append(line[i:i + 3])
+            i += 3
+        elif line[i:i + 2] in (b"\r\x06", b"\r\x08", b"\x91\x9d"):
+            units.append(line[i:i + 2])
+            i += 2
+        elif b in (0x91, 0x92) and i + 1 < n:
+            units.append(line[i:i + 2])
+            i += 2
+        elif 0x30 <= b <= 0x39:
+            j = i
+            while j < n and 0x30 <= line[j] <= 0x39:
+                j += 1
+            units.append(line[i:j])
+            i = j
+        else:
+            units.append(line[i:i + 1])
+            i += 1
+    return units
+
+
+# A "m@@" location-code token (0x80 0x00 <letter>) is 3 raw bytes at
+# wrap-calculation time, but the game substitutes it at runtime with an
+# actual location name string -- so it must be assumed to take real screen
+# width, not the 0 its control-byte encoding would otherwise suggest.
+# Measured widths of every location name in COMMAND1.HEB range 14-26;
+# using the max keeps the wrap point safely before the substituted text
+# could overflow, at the cost of wrapping slightly early for short names.
+LOCATION_TOKEN_WIDTH = 26
+
+
+def unit_width(unit):
+    if len(unit) == 3 and unit[0] == 0x80:
+        return LOCATION_TOKEN_WIDTH
+    if 0x30 <= unit[0] <= 0x39:
+        return sum(CHAR_WIDTH.get(b, DEFAULT_CHAR_WIDTH) for b in unit)
+    if len(unit) > 1:
+        return 0
+    return CHAR_WIDTH.get(unit[0], DEFAULT_CHAR_WIDTH)
+
 
 def pad_line(line, length):
     num_of_pads = 0
@@ -42,13 +108,15 @@ def pad_line(line, length):
     return pad + line
 
 
-def split_and_reverse(split_location, line):
+def split_and_reverse(split_location, units):
     new_line = bytes()
     prev_split = None
     for s in split_location:
         location = s[0]
         length = s[1]
-        current_line = line[location:prev_split:-1].strip()
+        segment_units = units[prev_split if prev_split is not None else 0:location]
+        segment_units.reverse()
+        current_line = b"".join(segment_units).strip()
         padded_line = pad_line(current_line, length)
         if 0xfe in padded_line:
             i = padded_line.index(0xfe)
@@ -68,14 +136,14 @@ def count_length(line):
     return count
 
 
-def find_split(line):
+def find_split(units):
     count = 0
     location = 0
     splits = []
-    for i in line:
-        count += CHAR_WIDTH.get(i, DEFAULT_CHAR_WIDTH)
-        if count >= args.len or i == 0xfe:
-            if i == ord(" ") or i == 0xfe:
+    for unit in units:
+        count += unit_width(unit)
+        if count >= args.len or unit == b"\xfe":
+            if unit == b" " or unit == b"\xfe":
                 splits.append((location, count))
                 count = 0
         location += 1
@@ -86,8 +154,9 @@ def find_split(line):
 
 
 def create_new_line(line):
-    split_location = find_split(line)
-    return split_and_reverse(split_location, line)
+    units = scan_units(line)
+    split_location = find_split(units)
+    return split_and_reverse(split_location, units)
 
 
 if __name__ == "__main__":
