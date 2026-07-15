@@ -1,0 +1,23 @@
+# Game installation (large binary assets, not translation source)
+/game/
+
+# Generated pipeline output (translate_phrase.py / build_translation.py)
+/tmp/
+/build/
+
+# Editor / IDE
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# Compiled objects
+*.o
+
+# Backup files
+*.BAK
+*.bak
+
+# unmodified game files
+/org_files/

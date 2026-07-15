@@ -72,7 +72,7 @@ def dump(data, out_img):
                         DUMP_ROW_WIDTH + x
                 pos_y = (char // DUMP_HEIGHT) * \
                         DUMP_ROW_HEIGHT + y
-                img.putpixel((pos_x, pos_y), color)
+                out_img.putpixel((pos_x, pos_y), color)
 
             # Draw row (character)
             for x in range(0, 8):
@@ -81,7 +81,7 @@ def dump(data, out_img):
                             DUMP_ROW_WIDTH + x
                     pos_y = (char // DUMP_HEIGHT) * \
                             DUMP_ROW_HEIGHT + y
-                    img.putpixel((pos_x, pos_y), col_black)
+                    out_img.putpixel((pos_x, pos_y), col_black)
                 row = row << 1
 
         base += height
