@@ -1,5 +1,9 @@
-# Game installation (large binary assets, not translation source)
-/game/
+# Game installation (large binary assets, not translation source).
+# The directory itself and a placeholder file inside it are tracked so the
+# expected install location shows up in a fresh checkout; everything else
+# a translator copies in stays untracked.
+/game/*
+!/game/.gitkeep
 
 # Generated pipeline output (translate_phrase.py / build_translation.py)
 /tmp/
