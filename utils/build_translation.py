@@ -59,6 +59,47 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
+def binary_runs(path):
+    """Return True if the compiled binary at path can actually execute here
+    (e.g. not built for a different CPU architecture)."""
+    try:
+        subprocess.run([str(path), "--help"], capture_output=True)
+        return True
+    except OSError:
+        return False
+
+
+def ensure_native_binaries():
+    """Rebuild utils/hsq and utils/tu from source if the committed binaries
+    can't run on this machine (e.g. they were built for a different CPU
+    architecture). Uses the existing utils/Makefile -- never hand-rolls the
+    compiler invocation.
+    """
+    stale = [b for b in (HSQ_BIN, TU_BIN) if not binary_runs(b)]
+    if not stale:
+        print("  utils/hsq, utils/tu: OK (native)")
+        return
+
+    names = ", ".join(b.name for b in stale)
+    print(f"  {names}: won't run on this machine, rebuilding from source")
+    # make only checks file existence/mtime, not whether a binary actually
+    # runs -- remove the stale ones first so it's forced to relink them.
+    for b in stale:
+        b.unlink()
+        obj = b.with_suffix(".o")
+        if obj.exists():
+            obj.unlink()
+    run(["make", "-C", str(UTILS_DIR)])
+
+    still_broken = [b for b in stale if not binary_runs(b)]
+    if still_broken:
+        sys.exit(
+            f"Rebuilt {', '.join(b.name for b in still_broken)} but it still "
+            f"won't run. Check that a C compiler (gcc/clang) is installed."
+        )
+    print(f"  rebuilt {names} for this machine")
+
+
 def md5sum(path):
     h = hashlib.md5()
     with open(path, "rb") as f:
@@ -192,16 +233,19 @@ def main():
 
     check_game_dir_populated()
 
-    print("[0/3] verifying org_files/")
+    print("[0/4] checking utils/hsq, utils/tu run on this machine")
+    ensure_native_binaries()
+
+    print("[1/4] verifying org_files/")
     ensure_org_files()
 
-    print("[1/3] building Hebrew font")
+    print("[2/4] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[2/3] building translated phrase/command files")
+    print("[3/4] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[3/3] installing into game/")
+    print("[4/4] installing into game/")
     install_to_game([font_hsq] + phrase_files)
 
     print("Done.")
