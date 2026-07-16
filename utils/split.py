@@ -100,6 +100,8 @@ QUANTITY_TOKEN_WIDTH = 3 * DEFAULT_CHAR_WIDTH
 
 
 def unit_width(unit):
+    if unit == b"\r":
+        return 0
     if len(unit) == 3 and unit[0] == 0x80:
         return LOCATION_TOKEN_WIDTH
     if len(unit) == 2 and unit[0] in (0x91, 0x92):
@@ -147,14 +149,20 @@ def count_length(line):
     return count
 
 
-def find_split(units):
+def find_split(units, max_len=None, force_split_units=frozenset()):
+    """Return [(location, count), ...] split points for word-wrapping
+    `units`. A split is forced at a unit in `force_split_units` (a
+    sentence-boundary marker, e.g. bare `\\r`/M) regardless of accumulated
+    width, in addition to the normal length-based wrap at `max_len`."""
+    if max_len is None:
+        max_len = args.len
     count = 0
     location = 0
     splits = []
     for unit in units:
         count += unit_width(unit)
-        if count >= args.len or unit == b"\xfe":
-            if unit == b" " or unit == b"\xfe":
+        if count >= max_len or unit == b"\xfe" or unit in force_split_units:
+            if unit == b" " or unit == b"\xfe" or unit in force_split_units:
                 splits.append((location, count))
                 count = 0
         location += 1
@@ -170,6 +178,18 @@ def create_new_line(line):
     return split_and_reverse(split_location, units)
 
 
+def create_wrapped_sentence_line(line, max_len):
+    """Word-wrap a line at `max_len`, same as create_new_line, but also
+    force a line break at each bare `\\r` (M marker) sentence boundary --
+    for lines like encyclopedia entries that aren't spoken dialogue and
+    use a wider box than the dialogue box's LINE_LENGTH, but still consist
+    of multiple independent sentences that must never be word-wrapped
+    together onto the same row."""
+    units = scan_units(line)
+    split_location = find_split(units, max_len=max_len, force_split_units={b"\r"})
+    return split_and_reverse(split_location, units)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--len', help='specify line length', type=int, default=LINE_LENGTH)
@@ -178,8 +198,15 @@ if __name__ == "__main__":
     parser.add_argument('--line', help='split and reverse line', type=str, default=TEST_LINE)
     parser.add_argument('--input', help='input file', type=str)
     parser.add_argument('--output', help='output file', type=str)
+    parser.add_argument('--wide-lines', help='comma-separated 0-based line numbers to word-wrap at '
+                                              '--wide-len instead of --len, with a forced line break '
+                                              'at every sentence boundary (bare \\r/M marker) -- for '
+                                              'non-dialogue entries in a wider box, e.g. PHRASE12\'s '
+                                              'encyclopedia lines', type=str, default='')
+    parser.add_argument('--wide-len', help='line length for --wide-lines', type=int, default=LINE_LENGTH)
 
     args = parser.parse_args()
+    wide_lines = {int(n) for n in args.wide_lines.split(',') if n != ''}
 
     # if len(sys.argv) > 1:
     #     input_line = sys.argv[1]
@@ -195,8 +222,11 @@ if __name__ == "__main__":
         out_file = open(args.output, 'wb')
         # in_file = open(args.input, 'r')
         # data = in_file.readlines()
-        for input_line in io.open(args.input, 'rb'):
-            out_file.write(create_new_line(input_line))
+        for line_no, input_line in enumerate(io.open(args.input, 'rb')):
+            if line_no in wide_lines:
+                out_file.write(create_wrapped_sentence_line(input_line, args.wide_len))
+            else:
+                out_file.write(create_new_line(input_line))
     else:
         for input_line in io.open(args.input, 'rb'):
             x = create_new_line(input_line)

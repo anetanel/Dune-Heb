@@ -210,12 +210,26 @@ def ensure_english_txt(name):
     return english_path
 
 
+# PHRASE12 lines 422-425 (0-based 421-424) are encyclopedia entries, not
+# spoken dialogue -- they use a wider box than the dialogue box's
+# LINE_LENGTH, so word-wrap them at PHRASE12_WIDE_LEN instead, with a
+# forced line break at each sentence boundary.
+PHRASE12_WIDE_LINES = {421, 422, 423, 424}
+PHRASE12_WIDE_LEN = 200
+
+
 def build_phrases():
     outputs = []
-    for name, no_split in [("PHRASE11", False), ("PHRASE12", False), ("COMMAND1", True)]:
+    for name, no_split, wide_lines, wide_len in [
+        ("PHRASE11", False, None, None),
+        ("PHRASE12", False, PHRASE12_WIDE_LINES, PHRASE12_WIDE_LEN),
+        ("COMMAND1", True, None, None),
+    ]:
         heb_path = REPO_ROOT / "translations" / f"{name}.HEB"
         english_path = ensure_english_txt(name)
-        outputs.append(translate_phrase.build_phrase(name, heb_path, english_path, no_split=no_split))
+        outputs.append(translate_phrase.build_phrase(
+            name, heb_path, english_path, no_split=no_split,
+            wide_lines=wide_lines, wide_len=wide_len))
     return outputs
 
 

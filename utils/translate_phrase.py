@@ -66,8 +66,15 @@ def reverse_only(encoded_bytes):
     )
 
 
-def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=None):
+def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=None,
+                  wide_lines=None, wide_len=None):
     """Run the full pipeline for one phrase/command file, returning the output path.
+
+    wide_lines: 0-based line numbers within this file to word-wrap at
+    wide_len instead of split.py's normal dialogue-box LINE_LENGTH, with a
+    forced line break at every sentence boundary (bare \\r/M marker) -- for
+    non-dialogue entries in a wider box embedded in an otherwise
+    line-length-limited file, e.g. PHRASE12's encyclopedia lines.
 
     Raises SystemExit on encoding errors (mirrors the previous CLI behavior),
     so callers (including build_translation.py) get a clear abort message.
@@ -95,7 +102,11 @@ def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=No
         split_bin.write_bytes(reverse_only(encoded_txt.read_bytes()))
     else:
         print(f"[2/4] splitting/reversing lines -> {split_bin}")
-        run([sys.executable, str(SPLIT_SCRIPT), "--input", str(encoded_txt), "--output", str(split_bin)])
+        cmd = [sys.executable, str(SPLIT_SCRIPT), "--input", str(encoded_txt), "--output", str(split_bin)]
+        if wide_lines:
+            cmd += ["--wide-lines", ",".join(str(n) for n in sorted(wide_lines)),
+                    "--wide-len", str(wide_len)]
+        run(cmd)
 
     print(f"[3/4] packing to binary phrase file -> {packed_bin}")
     run([str(TU_BIN), "-p", str(split_bin), str(packed_bin)])
