@@ -89,10 +89,21 @@ def scan_units(line):
 # could overflow, at the cost of wrapping slightly early for short names.
 LOCATION_TOKEN_WIDTH = 26
 
+# A "mq"/"mr" quantity token (0x91/0x92 <char>) is 2 raw bytes at
+# wrap-calculation time, but the game substitutes it at runtime with a
+# numeric value (troop counts, percentages, spice amounts) -- so it must be
+# assumed to take real screen width, not the 0 its control-byte encoding
+# would otherwise suggest. Sized for a conservative 3-digit worst case at
+# DEFAULT_CHAR_WIDTH, the same "widest observed/plausible value" approach
+# used for LOCATION_TOKEN_WIDTH.
+QUANTITY_TOKEN_WIDTH = 3 * DEFAULT_CHAR_WIDTH
+
 
 def unit_width(unit):
     if len(unit) == 3 and unit[0] == 0x80:
         return LOCATION_TOKEN_WIDTH
+    if len(unit) == 2 and unit[0] in (0x91, 0x92):
+        return QUANTITY_TOKEN_WIDTH
     if 0x30 <= unit[0] <= 0x39:
         return sum(CHAR_WIDTH.get(b, DEFAULT_CHAR_WIDTH) for b in unit)
     if len(unit) > 1:

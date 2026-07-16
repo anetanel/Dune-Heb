@@ -7,7 +7,6 @@
 
 # Generated pipeline output (translate_phrase.py / build_translation.py)
 /tmp/
-/build/
 
 # Editor / IDE
 .idea/
@@ -25,3 +24,4 @@ __pycache__/
 
 # unmodified game files
 /org_files/
+/game_copy
