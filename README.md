@@ -136,3 +136,25 @@ All scripts live in `utils/`.
 - **`utils/font.py`** — dumps/loads glyphs in the game's font-table binary format.
 - **`utils/split.py`** — word-wraps and reverses text lines for the game's RTL text renderer.
 - **`utils/hsq.py`** / **`utils/tu.py`** — pure-Python HSQ compression/decompression and phrase-binary pack/unpack, ported from the upstream `hsq.c`/`tu.c` (kept in `utils/` for reference, along with the `Makefile`, but no longer built or used — no C compiler required).
+- **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
+
+## Testing in-game
+
+`./utils/run_dune.sh` boots `game/` under DOSBox-X (mounted as `C:`,
+straight to the `C:\>` prompt — run `DUNE.BAT` to start the game) so you
+can check how a rebuilt translation actually renders. It expects a
+DOSBox-X binary and conf at `~/dosbox-mcp-tools/` by default
+(overridable via the `DOSBOX_X_BIN` / `DOSBOX_X_CONF` env vars); see
+"Setting up DOSBox-X" below if those don't exist yet on your machine.
+Plain `dosbox`/`dosbox-x` from your package manager works too, if you'd
+rather not set that up — `dosbox game/DUNE.BAT`.
+
+If you're driving the translation loop through Claude Code, it can
+optionally control DOSBox-X directly — typing keystrokes, navigating to
+a specific screen, and taking screenshots — via the `dosbox-mcp` MCP
+server (a wrapper around a GDB/QMP-automatable DOSBox-X fork,
+[jdmichaud/dosbox-mcp](https://github.com/jdmichaud/dosbox-mcp) /
+[lokkju/dosbox-x-remotedebug](https://github.com/lokkju/dosbox-x-remotedebug)).
+This is an optional, per-machine dev-tool setup — nothing in the build
+pipeline depends on it. Ask Claude to set it up if you want automated
+visual QA instead of running the game by hand.

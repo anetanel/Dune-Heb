@@ -116,6 +116,47 @@ extending support to a new phrase/command file:
    (per-line count of each token category should match between the `.TXT`
    and the encoded output) before trusting the pipeline output.
 
+## Testing the translation in-game (DOSBox-X + MCP)
+
+A `dosbox-mcp` MCP server may be registered at **project scope** for
+this repo (in `~/.claude.json`, not committed — a per-machine dev-tool
+setup, not something the build pipeline depends on). When connected
+(`claude mcp list` shows `dosbox: ... ✓ Connected`), it exposes
+`dosbox_*` tools — `dosbox_start`/`dosbox_stop`, `dosbox_type`
+(keystrokes), `dosbox_screenshot`, `dosbox_wait_for_text`, plus
+memory/register/breakpoint tools — that drive a real
+`dosbox-x-remotedebug` build (a DOSBox-X fork with GDB + QMP
+automation; see [jdmichaud/dosbox-mcp](https://github.com/jdmichaud/dosbox-mcp))
+running the actual game out of `game/`. Prefer this over asking the
+user to check a rendering by hand when it's available.
+
+If it isn't set up yet, offer to build it — see the "Setting up
+DOSBox-X + dosbox-mcp" walkthrough this repo's history was built with:
+apt-installing DOSBox-X's build deps, compiling
+`lokkju/dosbox-x-remotedebug` with
+`--enable-remotedebug --disable-libfluidsynth --disable-mt32`, cloning
+`jdmichaud/dosbox-mcp`, and running its `install.py` at project scope
+with a conf that mounts this repo's `game/` as `C:`.
+
+Facts worth knowing when using it:
+- The base conf auto-mounts `game/` as `C:` on boot — no manual `MOUNT`
+  needed. Boot sequence: `dosbox_wait_for_text("C:\\")`, then
+  `dosbox_type("DUNE.BAT\n")`.
+- Dune runs in VGA graphics mode, not text mode — use
+  `dosbox_screenshot`, not `dosbox_screen`.
+- On a desktop with `XMODIFIERS=@im=ibus` set (common with ibus input
+  method), this SDL1 build segfaults on window init unless
+  `XMODIFIERS` is cleared for the `dosbox-x` process — the MCP's env
+  block needs `"XMODIFIERS": ""`. If the MCP is ever reinstalled,
+  re-add that env var; `install.py` doesn't set it itself.
+- `dosbox_screenshot` can intermittently fail
+  (`"screendump failed: ... no file created"`) while an FMV/animation
+  is actively playing — a QMP timing quirk in the fork, not a game or
+  emulator bug. Retry; it's reliable on static screens, which covers
+  essentially all translated-text screens.
+- `utils/run_dune.sh` runs the exact same binary + conf without Claude
+  or the MCP involved, for the user to check something manually.
+
 ## Boundaries
 
 - Don't reproduce or quote the game's dialogue/story text in commits, PRs,
