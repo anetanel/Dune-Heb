@@ -139,9 +139,9 @@ apt-installing DOSBox-X's build deps, compiling
 with a conf that mounts this repo's `game/` as `C:`.
 
 Facts worth knowing when using it:
-- The base conf auto-mounts `game/` as `C:` on boot — no manual `MOUNT`
-  needed. Boot sequence: `dosbox_wait_for_text("C:\\")`, then
-  `dosbox_type("DUNE.BAT\n")`.
+- The base conf auto-mounts `game/` as `C:` **and auto-runs `DUNE.BAT`**
+  on boot — no manual `MOUNT` or typing needed, just
+  `dosbox_wait_for_text("D U N E")` (or similar) and wait for the intro.
 - Dune runs in VGA graphics mode, not text mode — use
   `dosbox_screenshot`, not `dosbox_screen`.
 - On a desktop with `XMODIFIERS=@im=ibus` set (common with ibus input
@@ -149,13 +149,89 @@ Facts worth knowing when using it:
   `XMODIFIERS` is cleared for the `dosbox-x` process — the MCP's env
   block needs `"XMODIFIERS": ""`. If the MCP is ever reinstalled,
   re-add that env var; `install.py` doesn't set it itself.
-- `dosbox_screenshot` can intermittently fail
-  (`"screendump failed: ... no file created"`) while an FMV/animation
-  is actively playing — a QMP timing quirk in the fork, not a game or
-  emulator bug. Retry; it's reliable on static screens, which covers
-  essentially all translated-text screens.
+- `dosbox_screenshot` **used to** intermittently fail
+  (`"screendump failed: ... no file created"`) — root cause is a race in
+  `dosbox-x-remotedebug`'s QMP `handle_screendump` (`src/debug/qmp.cpp`):
+  `CAPTURE_AddImage()` (`src/hardware/hardware.cpp`) clears the
+  "screenshot pending" flag the instant PNG encoding *starts*, not when
+  the file is actually finished and `last_screenshot_path` is set, so
+  the handler's flat 50ms grace sleep after the flag clears often wasn't
+  enough. The real fix is
+  [lokkju/dosbox-x-remotedebug#3](https://github.com/lokkju/dosbox-x-remotedebug/pull/3)
+  (by jdmichaud, `dosbox-mcp`'s own author — root-causes it properly by
+  reordering the flag-clear in `hardware.cpp` itself, plus fixes a
+  related fd leak) — **still unmerged** as of this writing. We initially
+  patched around it locally with a narrower workaround scoped to just
+  `qmp.cpp` (poll for the path instead of trusting the fixed sleep) and
+  opened our own PR, then closed it in favor of #3 once we found it
+  already existed and fixes the actual root cause rather than just the
+  symptom our workaround targeted. Our local `~/dosbox-mcp-tools/`
+  build still runs the narrower qmp.cpp-only patch (it works fine for
+  our purposes); if you rebuild from a fresh clone before #3 merges,
+  either re-apply that patch or cherry-pick #3 directly. If you're on
+  an unpatched build, you'll still see the old behavior — fall back to
+  reading the newest file in `~/dosbox-mcp-tools/dosbox-mcp/capture/*.png`
+  (sorted by mtime), which DOSBox-X's internal auto-capture always
+  writes even when the QMP handler's response errors.
 - `utils/run_dune.sh` runs the exact same binary + conf without Claude
   or the MCP involved, for the user to check something manually.
+
+### Navigating the game (controls & menus)
+
+No mouse tool is exposed by the MCP (only `dosbox_type`/`dosbox_press_key`/
+`dosbox_press_combo`), but the original 1992 instruction manual documents a
+full keyboard-driven cursor, which is what makes automated navigation
+possible at all:
+
+- **Two cursor-movement modes exist — prefer plain arrows.**
+  - Plain arrows (`dosbox_press_key("up"/"down"/"left"/"right")`) *cycle
+    the cursor between the current screen's defined hotspots* — not
+    continuous movement. This is why a single press can appear to jump
+    a long distance: it's landing on the next hotspot in tab order, and
+    **grayed-out/locked options are skipped entirely** (don't mistake a
+    skip for a stuck cursor — check whether what it jumped over was
+    grayed out). **In practice this is the faster, more reliable
+    method** — a handful of presses reliably snaps straight onto a
+    target hotspot (e.g. the History book icon, topic-list rows).
+  - The manual also documents `Ctrl`+arrow
+    (`dosbox_press_combo(["ctrl", "up"/"down"/...])`) as free,
+    non-hotspot-locked cursor positioning. **Tried and found worse in
+    practice**: aiming it by eye from screenshots was slow and imprecise
+    — missed a target hotspot even after several correction attempts.
+    Only reach for it if hotspot-jumping demonstrably can't reach a
+    target at all.
+  - `spc` or `ret` clicks whatever's currently under the cursor.
+  - Screenshot after *every single keypress* when navigating by feel —
+    batching presses before checking is how you overshoot a target.
+- **Intro**: `spc` advances slides one at a time; `esc` skips straight
+  to the first gameplay screen (the Palace throne room).
+- **Main control panel** (bottom of screen, present in most gameplay
+  views):
+  - Top-left book icon opens the **"History"** window (not an
+    "encyclopedia" — that's the correct in-universe term), which starts
+    with basic background info and unlocks more sections as the game
+    progresses.
+  - Right side is the **compass** — available travel directions
+    (N/S/E/W); its center shows a room map with characters when inside
+    the Palace.
+  - Center is the **options window** — available actions for the
+    current scene, including "speech" to talk to whichever character is
+    present.
+  - Bottom-left has a time-of-day/day-count indicator plus up to two
+    slots for companions currently following Paul.
+- **Save/pause**: `P` pauses; looking in the bedroom mirror inside the
+  Palace also opens SAVE/LOAD/RESTART. The game autosaves on entering a
+  new location.
+- **Dune Map / Globe**: reachable from the main control panel; shows
+  Fremen sietches and Harkonnen forts, troop-chief icons colored by
+  assigned occupation (yellow=spice mining, red=soldier, green=ecology),
+  and (via the globe) overall game status — day count, charisma,
+  percentage of Dune controlled (red=Atreides, blue=Harkonnen).
+- **Core game loop**, useful for recognizing what screen you've landed
+  on: recruit Fremen at sietches (requires contacting Stilgar first) →
+  assign occupation → manage motivation (drops without regular visits)
+  → locate Harkonnen forts via espionage → attack via the map → win by
+  taking every Harkonnen fort.
 
 ## Boundaries
 
