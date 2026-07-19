@@ -15,8 +15,11 @@
 __pycache__/
 *.pyc
 
-# Compiled objects
+# Compiled objects/binaries (reference C tools are no longer built/invoked
+# by the pipeline; utils/hsq.py and utils/tu.py replace them)
 *.o
+/utils/hsq
+/utils/tu
 
 # Backup files
 *.BAK

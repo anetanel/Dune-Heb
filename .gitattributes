@@ -1,0 +1,10 @@
+# Normalize line endings to LF for all text files, regardless of platform
+# or editor settings. This repo's source (translations/*.HEB, utils/*.py,
+# docs) is authored as LF; without this, tools that inject CRLF into the
+# working tree cause every line to show as changed even though content is
+# identical.
+* text=auto eol=lf
+
+# Binary assets: never touch line endings.
+*.png binary
+*.HSQ binary
