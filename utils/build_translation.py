@@ -35,8 +35,8 @@ GAME_DIR = REPO_ROOT / "game"
 BUILD_DIR = REPO_ROOT / "build"
 TMP_DIR = REPO_ROOT / "tmp"
 FONT_PNG_DIR = REPO_ROOT / "font_png"
-HSQ_BIN = UTILS_DIR / "hsq"
-TU_BIN = UTILS_DIR / "tu"
+HSQ_BIN = [sys.executable, str(UTILS_DIR / "hsq.py")]
+TU_BIN = [sys.executable, str(UTILS_DIR / "tu.py")]
 FONT_BIN = UTILS_DIR / "font.py"
 
 GAME_SENTINEL = "DUNEPRG.EXE"
@@ -57,47 +57,6 @@ FONT_POSITIONS = [65] + list(range(66, 92)) + [163, 167, 175] + list(range(193, 
 def run(cmd):
     print("+", " ".join(str(c) for c in cmd))
     subprocess.run(cmd, check=True)
-
-
-def binary_runs(path):
-    """Return True if the compiled binary at path can actually execute here
-    (e.g. not built for a different CPU architecture)."""
-    try:
-        subprocess.run([str(path), "--help"], capture_output=True)
-        return True
-    except OSError:
-        return False
-
-
-def ensure_native_binaries():
-    """Rebuild utils/hsq and utils/tu from source if the committed binaries
-    can't run on this machine (e.g. they were built for a different CPU
-    architecture). Uses the existing utils/Makefile -- never hand-rolls the
-    compiler invocation.
-    """
-    stale = [b for b in (HSQ_BIN, TU_BIN) if not binary_runs(b)]
-    if not stale:
-        print("  utils/hsq, utils/tu: OK (native)")
-        return
-
-    names = ", ".join(b.name for b in stale)
-    print(f"  {names}: won't run on this machine, rebuilding from source")
-    # make only checks file existence/mtime, not whether a binary actually
-    # runs -- remove the stale ones first so it's forced to relink them.
-    for b in stale:
-        b.unlink()
-        obj = b.with_suffix(".o")
-        if obj.exists():
-            obj.unlink()
-    run(["make", "-C", str(UTILS_DIR)])
-
-    still_broken = [b for b in stale if not binary_runs(b)]
-    if still_broken:
-        sys.exit(
-            f"Rebuilt {', '.join(b.name for b in still_broken)} but it still "
-            f"won't run. Check that a C compiler (gcc/clang) is installed."
-        )
-    print(f"  rebuilt {names} for this machine")
 
 
 def md5sum(path):
@@ -163,7 +122,7 @@ def build_font(rebuild=False):
     after_png = TMP_DIR / "DUNECHAR_after.png"
 
     print(f"[font] decompressing org_files/DUNECHAR.HSQ -> {raw_bin}")
-    run([str(HSQ_BIN), "-d", str(ORG_FILES_DIR / "DUNECHAR.HSQ"), "-o", str(raw_bin)])
+    run(HSQ_BIN + ["-d", str(ORG_FILES_DIR / "DUNECHAR.HSQ"), "-o", str(raw_bin)])
 
     print(f"[font] dumping original glyphs -> {before_png}")
     dump_font_png(raw_bin, before_png)
@@ -178,7 +137,7 @@ def build_font(rebuild=False):
     dump_font_png(tmp_bin, after_png)
 
     print(f"[font] compressing {tmp_bin} -> {out_hsq}")
-    run([str(HSQ_BIN), "-c", str(tmp_bin), "-o", str(out_hsq)])
+    run(HSQ_BIN + ["-c", str(tmp_bin), "-o", str(out_hsq)])
     return out_hsq
 
 
@@ -205,8 +164,8 @@ def ensure_english_txt(name):
     TMP_DIR.mkdir(exist_ok=True)
     raw_bin = TMP_DIR / f"{name}_ORIG.BIN"
     print(f"[english] extracting {name}.TXT from org_files/{name}.HSQ")
-    run([str(HSQ_BIN), "-d", str(ORG_FILES_DIR / f"{name}.HSQ"), "-o", str(raw_bin)])
-    run([str(TU_BIN), "-u", str(raw_bin), str(english_path)])
+    run(HSQ_BIN + ["-d", str(ORG_FILES_DIR / f"{name}.HSQ"), "-o", str(raw_bin)])
+    run(TU_BIN + ["-u", str(raw_bin), str(english_path)])
     return english_path
 
 
@@ -246,9 +205,6 @@ def main():
     args = parser.parse_args()
 
     check_game_dir_populated()
-
-    print("[0/4] checking utils/hsq, utils/tu run on this machine")
-    ensure_native_binaries()
 
     print("[1/4] verifying org_files/")
     ensure_org_files()

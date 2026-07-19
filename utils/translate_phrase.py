@@ -35,8 +35,8 @@ REPO_ROOT = UTILS_DIR.parent
 TRANSLATIONS_DIR = REPO_ROOT / "translations"
 TMP_DIR = REPO_ROOT / "tmp"
 SPLIT_SCRIPT = UTILS_DIR / "split.py"
-TU_BIN = UTILS_DIR / "tu"
-HSQ_BIN = UTILS_DIR / "hsq"
+TU_BIN = [sys.executable, str(UTILS_DIR / "tu.py")]
+HSQ_BIN = [sys.executable, str(UTILS_DIR / "hsq.py")]
 BUILD_DIR = REPO_ROOT / "build"
 
 
@@ -109,13 +109,13 @@ def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=No
         run(cmd)
 
     print(f"[3/4] packing to binary phrase file -> {packed_bin}")
-    run([str(TU_BIN), "-p", str(split_bin), str(packed_bin)])
+    run(TU_BIN + ["-p", str(split_bin), str(packed_bin)])
 
     print(f"[4/4] compressing -> {hsq_out}")
     if hsq_out.exists():
         print(f"    removing existing {hsq_out}")
         hsq_out.unlink()
-    run([str(HSQ_BIN), "-c", str(packed_bin), "-o", str(hsq_out)])
+    run(HSQ_BIN + ["-c", str(packed_bin), "-o", str(hsq_out)])
 
     print(f"Done. {hsq_out} is ready.")
     return hsq_out

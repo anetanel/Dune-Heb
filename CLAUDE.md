@@ -9,13 +9,15 @@ Build tooling for a Hebrew fan translation of the 1992 DOS game *Dune*. It
 never contains the original game's assets or executables — those are
 gitignored (`/game/`, `/org_files/`, `/build/`, `/tmp/`) and expected to be
 supplied locally by whoever runs the pipeline. Only the translation source
-(`translations/*.HEB`), font glyph images (`font_png/`), and the Python/C
+(`translations/*.HEB`), font glyph images (`font_png/`), and the Python
 tooling under `utils/` are committed. The English reference text
 (`<NAME>.TXT`) is derived, never committed — see below.
 
 All scripts (`build_translation.py`, `translate_phrase.py`, `heb_encode.py`,
-`load_heb_font.sh`, plus the pre-existing `font.py`/`split.py`/`hsq`/`tu`)
-live in `utils/`. Nothing runs from the repo root.
+`load_heb_font.sh`, plus the pre-existing `font.py`/`split.py`/`hsq.py`/`tu.py`)
+live in `utils/`. Nothing runs from the repo root. `hsq.c`/`tu.c`/`Makefile`
+are still present as the original upstream reference but are no longer part
+of the pipeline — see below.
 
 ## Directory roles (do not blur these)
 
@@ -41,7 +43,7 @@ live in `utils/`. Nothing runs from the repo root.
 per in-game phrase — it's the *shipped* content of `org_files/<NAME>.HSQ`,
 so there's no reason to hand-maintain a separate copy at the repo root.
 `build_translation.ensure_english_txt(name)` produces `tmp/<name>.TXT` by
-running `utils/hsq -d` then `utils/tu -u` against `org_files/<name>.HSQ`,
+running `utils/hsq.py -d` then `utils/tu.py -u` against `org_files/<name>.HSQ`,
 and both `translate_phrase.py` and `build_translation.py` call it
 automatically rather than expecting the file to already exist. Don't
 reintroduce a committed `<NAME>.TXT` at the repo root — if a script needs
@@ -68,9 +70,21 @@ static path.
   input file as `--dump`'s value; it'll silently read an empty buffer.
   `build_translation.py`'s font step uses this to render
   `tmp/DUNECHAR_before.png`/`tmp/DUNECHAR_after.png` for a visual diff.
-- `utils/hsq` and `utils/tu` are compiled C binaries (source in `utils/hsq.c`,
-  `utils/tu.c`) from the upstream `Dune-game-translations` toolchain, used
-  as-is. Don't reimplement HSQ compression or phrase packing in Python.
+- `utils/hsq.py` and `utils/tu.py` are pure-Python ports of the upstream
+  `Dune-game-translations` C tools (`utils/hsq.c`, `utils/tu.c`, still kept
+  in the repo for reference alongside the `Makefile`, but no longer built or
+  invoked). They exist because this pipeline needs to run on machines with
+  no C compiler available; `build_translation.py` and `translate_phrase.py`
+  now invoke them via `[sys.executable, "utils/hsq.py", ...]` /
+  `[sys.executable, "utils/tu.py", ...]` instead of shelling out to compiled
+  binaries. `hsq.py`'s compressor was validated by decompressing real shipped
+  `.HSQ` files from `game/` and recompressing them, confirming byte-identical
+  output to the original C binary (including a file spanning multiple
+  32KB-window compression chunks) — re-run that check if you touch the
+  compression logic, since any regression would produce a `.HSQ` the actual
+  DOS game engine can't decode. `tu.py`'s pack/unpack/check logic is a
+  straightforward line-for-line port with no such risk. Don't reintroduce a
+  dependency on `make`/a C compiler for this pipeline.
 - All scripts import each other as sibling modules within `utils/` (e.g.
   `translate_phrase.py` does `import heb_encode` and, lazily,
   `import build_translation`) — this only works because they all live in the
