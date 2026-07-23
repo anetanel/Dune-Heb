@@ -45,7 +45,7 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def reverse_only(encoded_bytes):
+def reverse_only(encoded_bytes, english_bytes=None):
     """Reverse each line in place, with no word-wrap and no added \\r.
 
     Used for files like COMMAND1 whose entries are short UI labels: the
@@ -59,11 +59,26 @@ def reverse_only(encoded_bytes):
     line-break variants) and literal digit runs must keep their internal
     byte order even as their position within the line flips, since the
     game's phrase engine reads their bytes in a fixed order.
+
+    A line left untranslated (byte-identical to the English original,
+    per english_bytes -- e.g. a pure numeric/English lookup table like
+    COMMAND1's time-of-day strings) is passed through unreversed: it reads
+    English/LTR as-is, and some untranslated lines are fixed-width tables
+    the game indexes into positionally, which double-reversal (translator
+    hand-reverses defensively, then this step reverses again) silently
+    breaks -- confirmed on COMMAND1 line 267, whose translator-reversed
+    copy was also 1 byte short, misaligning every subsequent 10-byte
+    time-slot the save-game screen looks up by fixed offset.
     """
     lines = encoded_bytes.split(b"\n")
-    return b"\n".join(
-        b"".join(reversed(heb_split.scan_units(line))) for line in lines
-    )
+    english_lines = english_bytes.split(b"\n") if english_bytes is not None else []
+    out = []
+    for i, line in enumerate(lines):
+        if i < len(english_lines) and line == english_lines[i]:
+            out.append(line)
+        else:
+            out.append(b"".join(reversed(heb_split.scan_units(line))))
+    return b"\n".join(out)
 
 
 def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=None,
@@ -99,7 +114,7 @@ def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=No
 
     if no_split:
         print(f"[2/4] reversing lines (no word-wrap) -> {split_bin}")
-        split_bin.write_bytes(reverse_only(encoded_txt.read_bytes()))
+        split_bin.write_bytes(reverse_only(encoded_txt.read_bytes(), Path(english_path).read_bytes()))
     else:
         print(f"[2/4] splitting/reversing lines -> {split_bin}")
         cmd = [sys.executable, str(SPLIT_SCRIPT), "--input", str(encoded_txt), "--output", str(split_bin)]
