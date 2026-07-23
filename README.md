@@ -17,6 +17,14 @@ project for reverse-engineering these formats. `hsq.py`/`tu.py` are a
 pure-Python port of that project's `hsq.c`/`tu.c` (kept in `utils/` for
 reference), so the pipeline needs no C compiler.
 
+Several in-game engine behaviors that aren't visible anywhere in this
+repo's tooling — notably how the save/load screen injects the live day
+count and time-of-day into its "Log N: DAY D / TIME" labels — were
+understood by reading [madmoose/dune-chani](https://github.com/madmoose/dune-chani),
+an annotated disassembly of the game's CD build, and its rendered
+listing at [thomas.fach-pedersen.net](https://thomas.fach-pedersen.net/dune/cryo-dune-3.7-cd-dncdprg.html).
+Thanks to Thomas Fach-Pedersen for that work.
+
 ## Directory layout
 
 | Directory | Contents | Committed? |
