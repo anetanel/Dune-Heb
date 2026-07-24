@@ -238,6 +238,51 @@ def create_wrapped_sentence_line(line, max_len):
     return split_and_reverse(split_location, units)
 
 
+# Digit runs are the one thing in an otherwise-natural-order line that must
+# still be flipped for create_natural_line: everything else (Hebrew
+# letters, spaces, punctuation, the multi-byte control tokens) is either
+# read by the phrase engine's parser in a fixed opcode-then-operand order
+# regardless of draw direction (so reversal was never about *them*, only
+# about compensating for an LTR-only drawer), or is itself just Hebrew text
+# that's now correct as typed once the drawer natively goes right-to-left.
+# A literal digit run is different: numerals always read left-to-right
+# (most-significant digit first) even embedded in RTL flow, so it has to be
+# pre-mirrored -- the exact inverse of the old scheme's requirement, where
+# digit runs were left alone *because* everything around them got reversed.
+def mirror_digit_runs(line):
+    """Reverse only the literal digit-run units of `line`, leaving every
+    other byte (Hebrew letters, spaces, control tokens, line terminator)
+    in its original typed order."""
+    out = bytearray()
+    for unit in scan_units(line):
+        if len(unit) > 1 and 0x30 <= unit[0] <= 0x39:
+            out += bytes(reversed(unit))
+        else:
+            out += unit
+    return bytes(out)
+
+
+def create_natural_line(line):
+    """Prepare `line` for the native-RTL dialogue engine (see
+    dune_rtl_engine_patch_moonshot project memory): no word-wrap -- the
+    patched engine's own layout_subtitle_lines already computes exact wrap
+    points at runtime from real per-glyph font widths, making split.py's
+    guessed CHAR_WIDTH/LOCATION_TOKEN_WIDTH/etc. tables unnecessary for
+    lines that go through it -- and no reversal of the line's overall byte
+    order, since the patched drawer now advances its pen right-to-left
+    through bytes in stream order directly. The one exception is digit
+    runs; see mirror_digit_runs.
+
+    Only valid for content actually drawn through the patched dialogue/
+    subtitle-box path (regular PHRASE11/PHRASE12 lines) -- NOT for
+    COMMAND1 (menus/UI, a different unpatched draw routine, stays on
+    reverse_only()) or PHRASE12's --wide-lines encyclopedia entries (also
+    drawn through a different, unpatched path -- keep using
+    create_wrapped_sentence_line for those).
+    """
+    return mirror_digit_runs(line)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--len', help='specify line length', type=int, default=LINE_LENGTH)
@@ -252,6 +297,12 @@ if __name__ == "__main__":
                                               'non-dialogue entries in a wider box, e.g. PHRASE12\'s '
                                               'encyclopedia lines', type=str, default='')
     parser.add_argument('--wide-len', help='line length for --wide-lines', type=int, default=LINE_LENGTH)
+    parser.add_argument('--rtl-native', action=argparse.BooleanOptionalAction, default=False,
+                         help='use create_natural_line (no word-wrap, no reversal except digit runs) '
+                              'for non---wide-lines lines, instead of create_new_line. Only correct '
+                              'for content drawn through the patched native-RTL dialogue engine -- see '
+                              'dune_rtl_engine_patch_moonshot project memory. --wide-lines entries are '
+                              'unaffected and always use create_wrapped_sentence_line.')
 
     args = parser.parse_args()
     wide_lines = {int(n) for n in args.wide_lines.split(',') if n != ''}
@@ -273,6 +324,8 @@ if __name__ == "__main__":
         for line_no, input_line in enumerate(io.open(args.input, 'rb')):
             if line_no in wide_lines:
                 out_file.write(create_wrapped_sentence_line(input_line, args.wide_len))
+            elif args.rtl_native:
+                out_file.write(create_natural_line(input_line))
             else:
                 out_file.write(create_new_line(input_line))
     else:

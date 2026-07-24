@@ -82,14 +82,24 @@ def reverse_only(encoded_bytes, english_bytes=None):
 
 
 def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=None,
-                  wide_lines=None, wide_len=None):
+                  wide_lines=None, wide_len=None, rtl_native=False):
     """Run the full pipeline for one phrase/command file, returning the output path.
 
     wide_lines: 0-based line numbers within this file to word-wrap at
     wide_len instead of split.py's normal dialogue-box LINE_LENGTH, with a
     forced line break at every sentence boundary (bare \\r/M marker) -- for
     non-dialogue entries in a wider box embedded in an otherwise
-    line-length-limited file, e.g. PHRASE12's encyclopedia lines.
+    line-length-limited file, e.g. PHRASE12's encyclopedia lines. Always
+    uses the old word-wrap-then-reverse scheme regardless of rtl_native,
+    since --wide-lines entries go through a different, unpatched draw path.
+
+    rtl_native: pass --rtl-native to split.py for this file's non-wide
+    lines -- no word-wrap (the patched engine computes exact wraps itself
+    at runtime) and no reversal except digit runs (the patched engine
+    draws right-to-left natively). Only correct paired with
+    utils/patch_rtl_engine.py's engine patches -- see the
+    dune_rtl_engine_patch_moonshot project memory. Ignored when no_split
+    is set (COMMAND1 stays on reverse_only(), a different unpatched path).
 
     Raises SystemExit on encoding errors (mirrors the previous CLI behavior),
     so callers (including build_translation.py) get a clear abort message.
@@ -121,6 +131,8 @@ def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=No
         if wide_lines:
             cmd += ["--wide-lines", ",".join(str(n) for n in sorted(wide_lines)),
                     "--wide-len", str(wide_len)]
+        if rtl_native:
+            cmd += ["--rtl-native"]
         run(cmd)
 
     print(f"[3/4] packing to binary phrase file -> {packed_bin}")

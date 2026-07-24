@@ -207,16 +207,16 @@ PHRASE12_WIDE_LEN = 200
 
 def build_phrases():
     outputs = []
-    for name, no_split, wide_lines, wide_len in [
-        ("PHRASE11", False, None, None),
-        ("PHRASE12", False, PHRASE12_WIDE_LINES, PHRASE12_WIDE_LEN),
-        ("COMMAND1", True, None, None),
+    for name, no_split, wide_lines, wide_len, rtl_native in [
+        ("PHRASE11", False, None, None, True),
+        ("PHRASE12", False, PHRASE12_WIDE_LINES, PHRASE12_WIDE_LEN, True),
+        ("COMMAND1", True, None, None, False),
     ]:
         heb_path = REPO_ROOT / "translations" / f"{name}.HEB"
         english_path = ensure_english_txt(name)
         outputs.append(translate_phrase.build_phrase(
             name, heb_path, english_path, no_split=no_split,
-            wide_lines=wide_lines, wide_len=wide_len))
+            wide_lines=wide_lines, wide_len=wide_len, rtl_native=rtl_native))
     return outputs
 
 
