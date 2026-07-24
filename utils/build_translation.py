@@ -16,8 +16,10 @@ this repo). The pipeline then:
   2. extracts each <NAME>.TXT (English reference text) from org_files/ if
      not already present in tmp/ (regenerated with utils/hsq -d + utils/tu -u)
   3. builds every translated phrase/command file (always re-run)
-  4. copies the results from build/ into game/, overwriting the originals
-  5. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
+  4. regenerates the intro title card ("DUNE" -> "חולית") inside
+     build/INTDS.HSQ (always re-run, see patch_intro_title.py)
+  5. copies the results from build/ into game/, overwriting the originals
+  6. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
      sietch) draw in RTL-correct order (idempotent, backs up on first run)
 """
 
@@ -28,6 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import patch_intro_title
 import patch_location_name_order
 import translate_phrase
 
@@ -50,6 +53,7 @@ EXPECTED_MD5 = {
     "DUNECHAR.HSQ": "e28fc15009f666f7e3dc34c0b969f7a3",
     "PHRASE11.HSQ": "5b12b3ca83fc0cd3c90f9a8958f4efab",
     "PHRASE12.HSQ": "46150b9b41dc8528602e422c20a86a9c",
+    "INTDS.HSQ": "aac0e6cb4af3626c88316b60d9a8c918",
 }
 
 # Font glyph positions loaded from font_png/, ported from load_heb_font.sh.
@@ -230,19 +234,22 @@ def main():
 
     check_game_dir_populated()
 
-    print("[1/5] verifying org_files/")
+    print("[1/6] verifying org_files/")
     ensure_org_files()
 
-    print("[2/5] building Hebrew font")
+    print("[2/6] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[3/5] building translated phrase/command files")
+    print("[3/6] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[4/5] installing into game/")
-    install_to_game([font_hsq] + phrase_files)
+    print("[4/6] regenerating intro title card (INTDS.HSQ)")
+    intro_title_hsq = patch_intro_title.build()
 
-    print("[5/5] patching game/DUNEPRG.EXE location-name draw order")
+    print("[5/6] installing into game/")
+    install_to_game([font_hsq, intro_title_hsq] + phrase_files)
+
+    print("[6/6] patching game/DUNEPRG.EXE location-name draw order")
     patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
 
     print("Done.")

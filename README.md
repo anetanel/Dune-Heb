@@ -25,13 +25,22 @@ an annotated disassembly of the game's CD build, and its rendered
 listing at [thomas.fach-pedersen.net](https://thomas.fach-pedersen.net/dune/cryo-dune-3.7-cd-dncdprg.html).
 Thanks to Thomas Fach-Pedersen for that work.
 
+`utils/bigs_sprite.py`'s picture-resource sprite format (used by
+`utils/patch_intro_title.py`) was reverse-engineered from the description
+and reference `dump.c` decoder at [bigs.fr's Dune data file docs](https://www.bigs.fr/dune_old/),
+mirrored at the [Dune Editor community wiki](https://sites.google.com/site/duneeditor/bigs_fr-mirror).
+
+`fonts/AharoniCLM-Book.ttf` is "Aharoni CLM" from the [Culmus project](https://culmus.sourceforge.net/),
+licensed under the GPLv2 (see `fonts/AharoniCLM-LICENSE`).
+
 ## Directory layout
 
 | Directory | Contents | Committed? |
 |---|---|---|
 | `translations/` | Hebrew `.HEB` source files (pasted from the translation spreadsheet) | yes |
 | `font_png/` | Hebrew glyph images loaded into the game's font table | yes |
-| `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py` | yes |
+| `fonts/` | Third-party font files used to render non-DUNECHAR graphics (currently just the intro title card) | yes |
+| `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py`, `bigs_sprite.py`, `patch_intro_title.py` | yes |
 | `org_files/` | Unmodified original `.HSQ` files, verified by checksum | **no** (gitignored) |
 | `game/` | Your copy of the full game install; also the final install target | **no** (gitignored) |
 | `build/` | Final translated `.HSQ` outputs, ready to install | yes |
@@ -133,6 +142,22 @@ argument. For example, to render the original (unmodified) glyph table:
 ./utils/font.py /tmp/DUNECHAR.BIN --dump x --output /tmp/before.png
 ```
 
+## The intro title card
+
+Unlike the dialogue/menu text, the boot intro's studio-credit and title
+screens ("Virgin Games" / "presents" / "A production from" / "CRYO" /
+"Interactive Entertainment Systems" / "DUNE") aren't drawn with the DUNECHAR
+bitmap font at all — they're pre-rendered picture sprites baked into
+`INTDS.HSQ` ("INTro Data Sequence"), one of `DUNEPRG.EXE`'s picture-resource
+files (a distinct container format from both the plain single-blob `.HSQ`
+files and the `LOGO.HNM` video — see `utils/bigs_sprite.py`'s docstring for
+the full format writeup). `utils/patch_intro_title.py` regenerates just the
+"DUNE" sprite as "חולית" (rendered from `fonts/AharoniCLM-Book.ttf`, chosen to
+echo the bold block lettering on the actual Israeli retail release's box
+art) and splices it back in, producing `build/INTDS.HSQ`. `build_translation.py`
+runs this on every build; run `./utils/patch_intro_title.py` directly to
+regenerate just this file.
+
 ## Scripts
 
 All scripts live in `utils/`.
@@ -144,6 +169,8 @@ All scripts live in `utils/`.
 - **`utils/font.py`** — dumps/loads glyphs in the game's font-table binary format.
 - **`utils/split.py`** — word-wraps and reverses text lines for the game's RTL text renderer.
 - **`utils/hsq.py`** / **`utils/tu.py`** — pure-Python HSQ compression/decompression and phrase-binary pack/unpack, ported from the upstream `hsq.c`/`tu.c` (kept in `utils/` for reference, along with the `Makefile`, but no longer built or used — no C compiler required).
+- **`utils/bigs_sprite.py`** — decode/encode for the picture-resource sprite container format (see "The intro title card" above).
+- **`utils/patch_intro_title.py`** — regenerates the intro's "DUNE" -> "חולית" title sprite; see "The intro title card" above.
 - **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
 
 ## Testing in-game
