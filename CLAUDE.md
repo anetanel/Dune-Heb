@@ -7,11 +7,12 @@ usage guide — read that first for the full pipeline picture.
 
 Build tooling for a Hebrew fan translation of the 1992 DOS game *Dune*. It
 never contains the original game's assets or executables — those are
-gitignored (`/game/`, `/org_files/`, `/build/`, `/tmp/`) and expected to be
-supplied locally by whoever runs the pipeline. Only the translation source
-(`translations/*.HEB`), font glyph images (`font_png/`), and the Python
-tooling under `utils/` are committed. The English reference text
-(`<NAME>.TXT`) is derived, never committed — see below.
+gitignored (`/game/`, `/org_files/`, `/tmp/`) and expected to be supplied
+locally by whoever runs the pipeline. The translation source
+(`translations/*.HEB`), font glyph images (`font_png/`), the Python
+tooling under `utils/`, and `build/`'s final `.HSQ` outputs are all
+committed. The English reference text (`<NAME>.TXT`) is derived, never
+committed — see below.
 
 All scripts (`build_translation.py`, `translate_phrase.py`, `heb_encode.py`,
 `load_heb_font.sh`, plus the pre-existing `font.py`/`split.py`/`hsq.py`/`tu.py`)

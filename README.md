@@ -34,7 +34,7 @@ Thanks to Thomas Fach-Pedersen for that work.
 | `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py` | yes |
 | `org_files/` | Unmodified original `.HSQ` files, verified by checksum | **no** (gitignored) |
 | `game/` | Your copy of the full game install; also the final install target | **no** (gitignored) |
-| `build/` | Final translated `.HSQ` outputs, ready to install | **no** (gitignored) |
+| `build/` | Final translated `.HSQ` outputs, ready to install | yes |
 | `tmp/` | Intermediate working files, including each `<NAME>.TXT` (English reference text, regenerated on demand — see below) | **no** (gitignored) |
 
 ## Quick start
