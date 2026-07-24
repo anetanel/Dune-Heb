@@ -60,6 +60,20 @@ FONT_POSITIONS = [65] + list(range(66, 92)) + [163, 167, 175] + list(range(193, 
 # uses lowercase Latin letters.
 FONT_POSITIONS += [ord(c) for c in "thsndr"]
 
+# "~" (0x7e, otherwise unused anywhere in the translated text) is a second,
+# narrower forced-blank glyph -- 2px wide, vs. the regular space's 4px and
+# "#"'s 5px -- for fine-grained pixel-level width trimming where neither of
+# those is precise enough (e.g. COMMAND1's save-slot rows overflowing their
+# box by only 1-2px at triple-digit day counts). DUNECHAR stores two
+# independent glyph tables in one file -- positions 0-127 (9px tall, "large"
+# font) and 128-255 (7px tall, "small" font, used by menu contexts like the
+# save-slot list) -- so any byte value used in a small-font context needs
+# its *own* override at position+128, or the renderer falls back to
+# whatever the original small-font glyph was (this bit us once: byte 126
+# alone left the save-slot "~" showing the original small-font tilde glyph,
+# unblanked and wider than intended). Hence both 126 and 126+128=254 here.
+FONT_POSITIONS += [ord("~"), ord("~") + 128]
+
 
 def run(cmd):
     print("+", " ".join(str(c) for c in cmd))
