@@ -51,9 +51,32 @@ MULTI_BYTE_TOKENS = [
 ]
 
 
+def _consume_digit_run(line, j, n):
+    """Return the end index of the digit run (possibly empty) starting at j."""
+    while j < n and 0x30 <= line[j] <= 0x39:
+        j += 1
+    return j
+
+
 def scan_units(line):
     """Split `line` into a list of byte-strings: each atomic control token
-    or digit run intact, everything else as single bytes."""
+    or digit run intact, everything else as single bytes.
+
+    A quantity token (mq/mr, 0x91/0x92 <char>, or the mqm] special case
+    0x91 0x9d) is followed in every known instance across PHRASE11/
+    PHRASE12/COMMAND1 by a literal single-digit placeholder (e.g. "mq<0",
+    "mr\xbc0") -- the engine's substitution mechanism scans forward from
+    the token to find this digit and writes the actual value ending at/
+    over it (the same digit-run-scan-and-inject convention documented for
+    COMMAND1's save-slot day/time fields, just used generically by the
+    phrase engine here). That placeholder digit must stay immediately
+    *after* the token in the final stored byte order -- if the two were
+    separate units, reversal could flip their relative order (digit
+    before token instead of after), breaking the engine's scan and
+    scrambling the substituted number (confirmed: PHRASE12 line 254's
+    troop count rendered "0190" instead of "1900" before this fix). So any
+    digit run immediately following a quantity token is folded into the
+    *same* atomic unit here, never split from it."""
     units = []
     i = 0
     n = len(line)
@@ -62,18 +85,20 @@ def scan_units(line):
         if b == 0x80 and line[i + 1:i + 2] == b"\x00" and i + 2 < n:
             units.append(line[i:i + 3])
             i += 3
-        elif line[i:i + 2] in (b"\r\x06", b"\r\x08", b"\x91\x9d"):
+        elif line[i:i + 2] == b"\x91\x9d":
+            j = _consume_digit_run(line, i + 2, n)
+            units.append(line[i:j])
+            i = j
+        elif line[i:i + 2] in (b"\r\x06", b"\r\x08"):
             units.append(line[i:i + 2])
             i += 2
         elif b in (0x91, 0x92) and i + 1 < n:
-            units.append(line[i:i + 2])
-            i += 2
-        elif 0x30 <= b <= 0x39:
-            j = i
-            while j < n and 0x30 <= line[j] <= 0x39:
-                j += 1
+            j = _consume_digit_run(line, i + 2, n)
             units.append(line[i:j])
             i = j
+        elif 0x30 <= b <= 0x39:
+            units.append(line[i:_consume_digit_run(line, i, n)])
+            i = _consume_digit_run(line, i, n)
         else:
             units.append(line[i:i + 1])
             i += 1
@@ -119,7 +144,11 @@ def unit_width(unit):
         return 0
     if len(unit) == 3 and unit[0] == 0x80:
         return LOCATION_TOKEN_WIDTH
-    if len(unit) == 2 and unit[0] in (0x91, 0x92):
+    if len(unit) >= 2 and unit[0] in (0x91, 0x92):
+        # May include a trailing single-digit placeholder folded in by
+        # scan_units (see its docstring) -- QUANTITY_TOKEN_WIDTH already
+        # conservatively covers the substituted value's real width, so the
+        # placeholder digit itself doesn't need separate accounting.
         return QUANTITY_TOKEN_WIDTH
     if unit == b"\x81":
         return AREA_TOKEN_WIDTH
