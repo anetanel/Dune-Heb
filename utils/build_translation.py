@@ -17,6 +17,8 @@ this repo). The pipeline then:
      not already present in tmp/ (regenerated with utils/hsq -d + utils/tu -u)
   3. builds every translated phrase/command file (always re-run)
   4. copies the results from build/ into game/, overwriting the originals
+  5. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
+     sietch) draw in RTL-correct order (idempotent, backs up on first run)
 """
 
 import argparse
@@ -26,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import patch_location_name_order
 import translate_phrase
 
 UTILS_DIR = Path(__file__).resolve().parent
@@ -227,17 +230,20 @@ def main():
 
     check_game_dir_populated()
 
-    print("[1/4] verifying org_files/")
+    print("[1/5] verifying org_files/")
     ensure_org_files()
 
-    print("[2/4] building Hebrew font")
+    print("[2/5] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[3/4] building translated phrase/command files")
+    print("[3/5] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[4/4] installing into game/")
+    print("[4/5] installing into game/")
     install_to_game([font_hsq] + phrase_files)
+
+    print("[5/5] patching game/DUNEPRG.EXE location-name draw order")
+    patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
 
     print("Done.")
 
