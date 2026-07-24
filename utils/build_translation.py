@@ -53,6 +53,13 @@ EXPECTED_MD5 = {
 FONT_POSITIONS = [65] + list(range(66, 92)) + [163, 167, 175] + list(range(193, 220)) + \
     [34, 35, 39, 45] + list(range(48, 58))
 
+# Blanked to hide the engine's hardcoded English ordinal-day-suffix letters
+# ("1st"/"2nd"/"3rd"/"4th") that get force-written onto COMMAND1's day
+# counter -- see command1_ordinal_suffix_injection memory. Only these six
+# lowercase ASCII codes are affected; nothing else in the translated text
+# uses lowercase Latin letters.
+FONT_POSITIONS += [ord(c) for c in "thsndr"]
+
 
 def run(cmd):
     print("+", " ".join(str(c) for c in cmd))
