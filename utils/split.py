@@ -98,6 +98,21 @@ LOCATION_TOKEN_WIDTH = 26
 # used for LOCATION_TOKEN_WIDTH.
 QUANTITY_TOKEN_WIDTH = 3 * DEFAULT_CHAR_WIDTH
 
+# A "ma"/"mb" pair (single raw bytes 0x81/0x82, joined by a literal "-" in
+# the HEB source) is Dune's other location-substitution scheme, used for
+# troop-status radio messages ("My troop is in <area>-<site>...") in
+# PHRASE11/PHRASE12 -- confirmed by grep that bytes 0x81/0x82 never appear
+# outside this exact "\x81-\x82" pattern in either file, so treating them
+# as location width unconditionally is safe. Each is substituted at
+# runtime with a name from COMMAND1.HEB's shared area/site name list
+# (areas at index 0-11, sites at 12-23), so -- like LOCATION_TOKEN_WIDTH --
+# it must be assumed to take real screen width, not the 5px a generic
+# single byte would otherwise get. Measured against every name in that
+# list: areas measure 14-26px (the same range LOCATION_TOKEN_WIDTH already
+# covers), sites measure 14-44px.
+AREA_TOKEN_WIDTH = LOCATION_TOKEN_WIDTH
+SITE_TOKEN_WIDTH = 44
+
 
 def unit_width(unit):
     if unit == b"\r":
@@ -106,6 +121,10 @@ def unit_width(unit):
         return LOCATION_TOKEN_WIDTH
     if len(unit) == 2 and unit[0] in (0x91, 0x92):
         return QUANTITY_TOKEN_WIDTH
+    if unit == b"\x81":
+        return AREA_TOKEN_WIDTH
+    if unit == b"\x82":
+        return SITE_TOKEN_WIDTH
     if 0x30 <= unit[0] <= 0x39:
         return sum(CHAR_WIDTH.get(b, DEFAULT_CHAR_WIDTH) for b in unit)
     if len(unit) > 1:
