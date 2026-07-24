@@ -169,23 +169,30 @@ def pad_line(line, length):
     return pad + line
 
 
-def split_and_reverse(split_location, units):
+def split_and_reverse(split_location, units, reverse=True, pad=True):
+    """reverse=False/pad=False is for create_natural_line: the patched
+    native-RTL engine draws each line's bytes in stream order and handles
+    its own right-alignment, so neither the old per-line byte reversal nor
+    the '#'-padding compensation (both artifacts of the old LTR-only
+    drawer) are wanted there -- but the width-based wrap-point computation
+    (find_split) is still needed regardless of drawer direction, see
+    create_natural_line's docstring for why."""
     new_line = bytes()
     prev_split = None
     for s in split_location:
         location = s[0]
         length = s[1]
         segment_units = units[prev_split if prev_split is not None else 0:location]
-        segment_units.reverse()
+        if reverse:
+            segment_units = list(reversed(segment_units))
         current_line = b"".join(segment_units).strip()
-        padded_line = pad_line(current_line, length)
-        if 0xfe in padded_line:
-            i = padded_line.index(0xfe)
-            new_line += padded_line[:i] + padded_line[i+1:] + bytes.fromhex("fe")
+        if pad:
+            current_line = pad_line(current_line, length)
+        if 0xfe in current_line:
+            i = current_line.index(0xfe)
+            new_line += current_line[:i] + current_line[i+1:] + bytes.fromhex("fe")
         else:
-            new_line += padded_line + bytes("\r", "ascii")
-        # print(current_line)
-        # print(padded_line)
+            new_line += current_line + bytes("\r", "ascii")
         prev_split = location
     return new_line + bytes("\n", "ascii")
 
@@ -264,14 +271,29 @@ def mirror_digit_runs(line):
 
 def create_natural_line(line):
     """Prepare `line` for the native-RTL dialogue engine (see
-    dune_rtl_engine_patch_moonshot project memory): no word-wrap -- the
-    patched engine's own layout_subtitle_lines already computes exact wrap
-    points at runtime from real per-glyph font widths, making split.py's
-    guessed CHAR_WIDTH/LOCATION_TOKEN_WIDTH/etc. tables unnecessary for
-    lines that go through it -- and no reversal of the line's overall byte
-    order, since the patched drawer now advances its pen right-to-left
-    through bytes in stream order directly. The one exception is digit
-    runs; see mirror_digit_runs.
+    dune_rtl_engine_patch_moonshot project memory): still pre-wrapped in
+    Python via the same find_split word-wrap used by create_new_line
+    (proven safe at LINE_LENGTH -- see dune_line_length_measurement), just
+    without the old scheme's per-line byte reversal or '#' padding, since
+    the patched drawer now advances its pen right-to-left through each
+    line's bytes in stream order directly and the engine handles its own
+    right-alignment.
+
+    A prior version of this function skipped word-wrap entirely, trusting
+    the patched engine's own layout_subtitle_lines to compute exact wrap
+    points at runtime from real per-glyph font widths -- true in principle
+    (confirmed by disassembly), but it turned out unsafe in practice: fed
+    a 277-byte unbroken line (more than double the longest chunk this
+    engine had ever been asked to lay out via the old always-pre-wrapped
+    path), the game crashed with CS hijacked (buffer overflow signature
+    matching dune_dialogue_crash_2026_07_25's unrelated earlier crash) and
+    visibly overlapping/garbled glyphs even before the crash. Pre-wrapping
+    here avoids ever handing the engine a line longer than what's already
+    been exercised safely, at the cost of the "table-free" purity part of
+    the moonshot's original goal -- CHAR_WIDTH/LOCATION_TOKEN_WIDTH/etc.
+    are still used for the wrap-point decision, just not for a final
+    per-line reversal. The one remaining reversal is digit runs; see
+    mirror_digit_runs.
 
     Only valid for content actually drawn through the patched dialogue/
     subtitle-box path (regular PHRASE11/PHRASE12 lines) -- NOT for
@@ -280,7 +302,10 @@ def create_natural_line(line):
     drawn through a different, unpatched path -- keep using
     create_wrapped_sentence_line for those).
     """
-    return mirror_digit_runs(line)
+    units = scan_units(line)
+    split_location = find_split(units)
+    wrapped = split_and_reverse(split_location, units, reverse=False, pad=False)
+    return mirror_digit_runs(wrapped)
 
 
 if __name__ == "__main__":
