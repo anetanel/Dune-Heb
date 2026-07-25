@@ -130,15 +130,23 @@ SET_CAVE = bytes.fromhex(
 )
 
 # clear_cave: replays the displaced tail (save pen for next batch, dec si),
-# lowers the RTL flag, discards the far-call return address and does
-# draw_subtitle_body's own NEAR return to its caller. Reached from 0x986B.
+# lowers the RTL flag, and returns (FAR) to draw_subtitle_body's own `ret`
+# at 0x9874, which is deliberately left in place. Reached from 0x986B.
+#
+# It must NOT do the caller's near return itself: this cave lives in the
+# appended segment, so a `retn` would return within the CAVE's code segment
+# (0x1221+load_base) instead of the main code segment -- it would jump to
+# cave_seg:<main-offset> = garbage, which is exactly the invalid-opcode
+# crash the previous version hit (the stack filled with the cave segment
+# and execution ran off into the data segment). Instead `retf` lands back
+# at 0x9870 in main, the trailing NOPs fall through to the untouched
+# `ret` at 0x9874, and THAT does the near return in the correct segment.
 CLEAR_CAVE = bytes.fromhex(
     "8916E842"    # mov [0x42e8],dx
     "891EEA42"    # mov [0x42ea],bx
     "4E"          # dec si
     "C606EC4200"  # mov byte [0x42ec],0    (RTL flag off)
-    "83C404"      # add sp,4               (pop the far-call CS:IP)
-    "C3"          # retn                   (draw_subtitle_body's near ret)
+    "CB"          # retf  (back to 0x9870 in main; 0x9874 `ret` does the rest)
 )
 
 # space_cave: inter-word advance. On entry dx = space width. Compute
@@ -249,13 +257,15 @@ def build_sites(cave_seg_raw, blob_offsets):
         reloc_field_rel=3,
     ))
 
-    # CLEAR hook 0x986B: `mov [0x42e8],dx; mov [0x42ea],bx; dec si; ret`
-    # (10 bytes) -> far call clear_cave + 5 nops. (clear_cave replays the
-    # tail, clears the flag, and performs the near return itself.)
+    # CLEAR hook 0x986B: `mov [0x42e8],dx; mov [0x42ea],bx; dec si` (9 bytes,
+    # NOT the trailing `ret` at 0x9874) -> far call clear_cave + 4 nops.
+    # clear_cave replays the tail, clears the flag, and `retf`s back to
+    # 0x9870; the NOPs fall through to the untouched `ret` at 0x9874, which
+    # does the caller's near return in the correct (main) code segment.
     sites.append(Site(
-        "RTL flag clear hook (draw_subtitle_body tail + near return)",
-        0x986B, "8916E842" "891EEA42" "4E" "C3",
-        (lambda o=clr: far_call(cave_seg_raw, o) + b"\x90\x90\x90\x90\x90"),
+        "RTL flag clear hook (draw_subtitle_body tail; keeps 0x9874 ret)",
+        0x986B, "8916E842" "891EEA42" "4E",
+        (lambda o=clr: far_call(cave_seg_raw, o) + b"\x90\x90\x90\x90"),
         reloc_field_rel=3,
     ))
 
