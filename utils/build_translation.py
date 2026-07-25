@@ -21,6 +21,10 @@ this repo). The pipeline then:
   5. copies the results from build/ into game/, overwriting the originals
   6. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
      sietch) draw in RTL-correct order (idempotent, backs up on first run)
+  7. patches game/DUNEPRG.EXE so dialogue/subtitle text renders Hebrew
+     natively right-to-left (idempotent, see patch_rtl_engine.py --
+     EXPERIMENTAL; wired in here specifically so a from-scratch game/
+     restore can't silently drop it, as happened once during development)
 """
 
 import argparse
@@ -32,6 +36,7 @@ from pathlib import Path
 
 import patch_intro_title
 import patch_location_name_order
+import patch_rtl_engine
 import translate_phrase
 
 UTILS_DIR = Path(__file__).resolve().parent
@@ -296,23 +301,26 @@ def main():
 
     check_game_dir_populated()
 
-    print("[1/6] verifying org_files/")
+    print("[1/7] verifying org_files/")
     ensure_org_files()
 
-    print("[2/6] building Hebrew font")
+    print("[2/7] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[3/6] building translated phrase/command files")
+    print("[3/7] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[4/6] regenerating intro title card (INTDS.HSQ)")
-    intro_title_hsq = patch_intro_title.build()
+    print("[4/7] regenerating intro title card (INTDS.HSQ)")
+    intro_title_hsq, _intro_title_height = patch_intro_title.build()
 
-    print("[5/6] installing into game/")
+    print("[5/7] installing into game/")
     install_to_game([font_hsq, intro_title_hsq] + phrase_files)
 
-    print("[6/6] patching game/DUNEPRG.EXE location-name draw order")
+    print("[6/7] patching game/DUNEPRG.EXE location-name draw order")
     patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
+
+    print("[7/7] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
+    patch_rtl_engine.apply_patches(GAME_DIR / patch_rtl_engine.EXE_NAME)
 
     print("Done.")
 

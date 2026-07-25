@@ -45,6 +45,32 @@ correctly against the fixed-position blue gradient sprite drawn after it;
 much taller (52) started covering/hiding the rule line, so this isn't
 unlimited headroom. 38 (37 letter rows + 1 rule row) is what shipped.
 
+The sprite draws from a fixed top-left screen anchor (not centered/bottom-
+anchored), so a taller sprite pushes its *bottom* (the rule line) further
+down by exactly the added height -- confirmed by pixel-measuring the rule's
+screen row across two builds of different heights (a 34px height increase
+moved the rule down by exactly 34px). This is a real constraint with no
+content-only workaround: a bigger font unavoidably sits lower on screen.
+
+Do NOT try to "fix" this by patching game/DUNEPRG.EXE's title Y position.
+This was attempted: live-tracing the VGA blit call chain in dosbox-mcp
+(breakpoint at the offset-computation routine `DI = Y*320 + X + [cs:0x1A0]`,
+called with BX=Y/DX=X) found what looked like the intro's script table --
+(sprite_id: u16, x: u16, y: u16) records, 0xFFFF-separated groups -- with
+sprite 5's (title) record apparently at file offset 0x1041D (y=74, x=0),
+corroborated by neighboring records for sprites 8/9/10 matching live-
+captured X/Y for those credit lines exactly. Despite that, patching that
+y value in-game did NOT change the title's rendered position at all, and
+separately corrupted an unrelated later scene (the Chani/desert-sunset zoom
+several fades later showed Paul's face bleeding through in place of part of
+the background) -- confirmed reproducible: rebuilding with only the taller
+sprite was clean, adding the EXE patch on top reintroduced the corruption
+every time. Whatever that offset actually is, it is not a safe standalone
+title-position anchor and is aliased with something else the engine reads
+later. If this is revisited, it needs a fresh, more rigorous static-plus-
+live cross-check of that offset's true role before ever writing to it again
+-- not just pattern-matching neighboring table values.
+
 Font: fonts/AharoniCLM-Book.ttf (Culmus project's "Aharoni CLM", GPLv2 --
 see fonts/AharoniCLM-LICENSE), chosen to match the bold, tall/narrow block
 lettering on the actual Israeli ("Bug Games") retail release's box art,
@@ -89,14 +115,16 @@ SPRITE_WIDTH = 320  # full VGA width, matches every other sprite in this file
 # DOSBox-X (see repo history for the iteration -- these aren't derived from
 # anything, just the values that looked right).
 WORK_SCALE = 16       # supersampling factor before the final box-filter downsample
-FONT_SIZE = 520       # at WORK_SCALE=16; scales with it (was 260 at WORK_SCALE=8)
+FONT_SIZE = 68 * WORK_SCALE   # effective ~68px final glyph size, confirmed to look good by eye
 TARGET_WIDTH_FRAC = 0.66   # total letter+spacing width, as a fraction of the sprite width
 V_STRETCH = 1.3       # vertical stretch applied to the rendered glyphs
 H_STRETCH = 1.18      # horizontal stretch applied to the rendered glyphs
 BINARIZE_THRESHOLD = 110   # mask threshold applied before the box downsample, for crisp edges
 
-# Anti-aliasing quantization: box-downsampled mask intensity (0-255) -> nibble.
-NIBBLE_LEVELS = [(32, 0), (96, 4), (160, 3), (224, 2)]  # (upper bound, nibble); falls through to 1
+# Minimal anti-aliasing: mostly a hard transparent/bright split, with a single
+# thin mid-shade band right at the edge to take the harshest jaggies off
+# curves without going back to a full soft multi-step ramp.
+NIBBLE_LEVELS = [(64, 0), (176, 3)]  # (upper bound, nibble); falls through to 1
 
 
 def intensity_to_nibble(v):
@@ -199,7 +227,7 @@ def build(org_path=None, out_path=None):
 
     BUILD_DIR.mkdir(exist_ok=True)
     out_path.write_bytes(recompressed)
-    return out_path
+    return out_path, height
 
 
 def main():
