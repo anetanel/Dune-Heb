@@ -204,18 +204,15 @@ def ensure_english_txt(name):
 PHRASE12_WIDE_LINES = {421, 422, 423, 424}
 PHRASE12_WIDE_LEN = 200
 
-# COMMAND1 stays entirely pre-reversed (reverse_only). Both of its text
-# audiences are drawn left-to-right: the menu/UI labels go through
-# font_draw_glyph_func with the RTL flag clear (LTR), and the intro
-# narration is drawn by the cinematic player's OWN glyph routine, which
-# the RTL engine patch never touches (its draws don't hit our patched
-# font_draw_glyph_func at all -- confirmed: natural-order intro content
-# rendered reversed in-game, i.e. drawn LTR). So the old pre-reversal is
-# what makes both read correctly; only PHRASE11/12 (spoken dialogue, drawn
-# through the patched draw_subtitle_body) are fed natural order. The
-# natural_lines hook is kept available for any COMMAND1 line later found
-# to go through the patched RTL path, but none currently do.
-COMMAND1_NATURAL_LINES = set()
+# COMMAND1's intro narration (0-based indices 267-274, == the translator's
+# 1-based lines 268-275) IS drawn through the same RTL-patched subtitle
+# path as PHRASE dialogue -- with pre-reversed content it reads
+# left-to-right in-game, i.e. pre-reversed + native-RTL draw = reversed
+# reading, so those lines must be fed NATURAL order (digit runs mirrored)
+# to read correctly. Everything else in COMMAND1 -- menu/UI labels drawn
+# by font_draw_glyph_func with the RTL flag clear (plain LTR) -- stays
+# pre-reversed. So only this narration block is natural.
+COMMAND1_NATURAL_LINES = set(range(267, 275))
 
 
 def build_phrases():
