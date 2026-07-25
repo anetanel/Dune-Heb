@@ -108,7 +108,7 @@ JUSTIFY_FLIP = False  # flip the 0x97B6 justify pre-adjust add->sub (tuning)
 # (see dune_rtl_engine_patch_moonshot memory) couldn't reproduce or
 # explain, so these let each half be tested independently to narrow down
 # which one is actually at fault before re-enabling both.
-ENABLE_NAME_REVERSAL = False
+ENABLE_NAME_REVERSAL = True
 ENABLE_QUANTITY_REVERSAL = False
 
 # ---------------------------------------------------------------------------
@@ -211,14 +211,45 @@ CLEAR_CAVE = bytes.fromhex(
 # where stosb/lodsb actually read/write throughout this function) before
 # resuming.
 #
-# All four assembled with nasm (not hand-encoded -- this session already
-# cost real time to two separate hand-arithmetic mistakes elsewhere; see
-# dune_rtl_engine_patch_moonshot / feedback_dosbox_tracing_pitfalls) from:
+# EVERY access to [0x42EC]/[0x42EE] in all four caves below is ES-relative
+# (an explicit 0x26 segment-override prefix), not DS-relative. This was
+# found live (dosbox-mcp breakpoint trace through an actual multi-name
+# dialogue line, entry_mark/name_exit hit repeatedly for several tokens in
+# sequence): DS is only reliably the game data segment at the *outermost*
+# call into this token-expansion function. Partway through a line with
+# several substitutions back-to-back, DS was observed to read as 0 at a
+# later entry_mark hit -- the original code's own DS save/restore
+# (`mov ds,[bp+2]` at each exit) doesn't hold up the same way across
+# several sequential calls into 0x9609 within one line, for reasons not
+# further chased down (didn't need to be: ES was confirmed constant at
+# the game data segment across every single hit, entry and exit, for the
+# whole traced dialogue, so it's the reliable choice regardless of *why*
+# DS drifts). Without the override, a plain `mov [0x42ee],di` at a
+# DS=0 moment writes DI straight into low memory at absolute address
+# 0x42EE -- confirmed by reading that physical address before and after
+# the instruction executed and watching it change to the live DI value --
+# corrupting whatever unrelated word normally lives there and producing
+# exactly the delayed corrupt-now-crash-later BIOS int-6 hang this whole
+# investigation chased. This fix was live-verified the same way (the
+# corrupting write no longer happens because the write now targets
+# ES:0x42EE, which stays the correct data segment throughout).
+#
+# All four re-assembled by hand from the nasm-verified originals plus the
+# ES-override insertions (each insertion is a single 0x26 prefix byte
+# before an existing instruction, so every original instruction's own
+# encoding is untouched -- only two things shift as a result: the jz
+# .skip branch's rel8 in the two exit caves grows by 1, 0x1C->0x1D,
+# since exactly one of the two insertions falls between the jz and its
+# own target while both fall before .skip; the jae .done branch is
+# unaffected, both insertions precede it and its target uniformly, net
+# offset unchanged at 0x0D. Offsets re-derived and cross-checked in
+# Python against the original, known-correct FARJMP_LOCAL_OFF constants
+# before writing -- not hand-counted.) From:
 #
 #   entry_mark_cave:                      ; replaces 964D-9651 (5B)
 #       add     bp, 4                     ; replayed
 #       mov     si, ax                    ; replayed
-#       mov     word [0x42ee], di         ; NEW: record output-span start
+#       mov     word [es:0x42ee], di      ; NEW: record output-span start
 #       retf
 #
 #   qty_entry_mark_cave:                  ; replaces 969C-96A2 (7B)
@@ -227,44 +258,62 @@ CLEAR_CAVE = bytes.fromhex(
 #                                         ; replay's shorter disp8 encoding
 #                                         ; is behaviourally identical)
 #       cmp     bl, 0x92                  ; replayed
-#       mov     word [0x42ee], di         ; NEW: record output-span start
+#       mov     word [es:0x42ee], di      ; NEW: record output-span start
 #       retf
 #
 #   name_exit_cave:                       ; replaces 967C-9680 (5B)
 #       mov     ds, [bp+2]                ; replayed
-#       cmp     byte [0x42ec], 0
-#       jz      .skip
 #       push ax / push bx / push di
-#       mov     bx, [0x42ee]              ; left = recorded start
+#       mov     bx, [es:0x42ee]           ; left = recorded start
 #       dec     di                        ; right = current end - 1
 #   .loop: cmp bx,di / jae .done
 #       mov al,[es:bx] / xchg al,[es:di] / mov [es:bx],al
 #       inc bx / dec di / jmp short .loop
 #   .done: pop di / pop bx / pop ax
-#   .skip:
 #       add     sp, 4                     ; discard far-call return addr
 #       jmp     0x0:0x9618                ; far jmp, seg relocated to main
+#
+#   UNCONDITIONAL as of this fix -- no [0x42EC] check. Found live (many
+#   dosbox-mcp breakpoint traces, several sessions): [0x42EC] reads 0 at
+#   *every* entry_mark/name_exit hit, always, because 0x9609's token
+#   expansion is a pre-pass that runs before draw_subtitle_body's
+#   SET_CAVE ever raises the flag for the actual per-line draw -- so the
+#   conditional reversal this cave was built around never once fired.
+#   The visible symptom (sietch name still reversed on screen, confirmed
+#   directly by the user even after the crash/hang fixes above landed)
+#   was never fixed by the flag-gated design at all; only the crash
+#   mechanics were. Made unconditional instead, on the reasoning (not
+#   fully proven, but consistent with every other finding this session)
+#   that entry_mark/name_exit specifically is reached ONLY from
+#   draw_subtitle_body's own phrase-token parsing -- i.e. only ever for
+#   RTL dialogue content -- unlike qty_entry_mark/quantity_exit, which
+#   dune_rtl_engine_patch_moonshot's occupation/duration section already
+#   established is ALSO reached from COMMAND1's own LTR troop-status
+#   menu (via the same COMMAND1-table substitution mechanism), so making
+#   quantity reversal unconditional would break that screen. Quantity
+#   reversal stays flag-gated (and disabled by default, see
+#   ENABLE_QUANTITY_REVERSAL) rather than guessing at a fix for it here.
 #
 #   quantity_exit_cave:                   ; replaces 96DE-96E2 (5B, incl.
 #                                          ; the freed byte at 96E2 -- see
 #                                          ; the jc-redirect patch below)
 #       pop     bp                        ; replayed
 #       <identical body to name_exit_cave from the cmp onward>
-ENTRY_MARK_CAVE = bytes.fromhex("83c50489c6893eee42cb")
+ENTRY_MARK_CAVE = bytes.fromhex("83c50489c626893eee42cb")
 
-QTY_ENTRY_MARK_CAVE = bytes.fromhex("8b460080fb92893eee42cb")
+QTY_ENTRY_MARK_CAVE = bytes.fromhex("8b460080fb9226893eee42cb")
 
 NAME_EXIT_CAVE = bytes.fromhex(
-    "8e5e02803eec4200741c5053578b1eee424f39fb730d"
+    "8e5e02505357268b1eee424f39fb730d"
     "268a07268605268807434febef5f5b5883c404ea18960000"
 )
-NAME_EXIT_FARJMP_LOCAL_OFF = 0x2C  # offset within NAME_EXIT_CAVE of the far-jmp's seg field
+NAME_EXIT_FARJMP_LOCAL_OFF = 0x26  # offset within NAME_EXIT_CAVE of the far-jmp's seg field
 
 QUANTITY_EXIT_CAVE = bytes.fromhex(
-    "5d803eec4200741c5053578b1eee424f39fb730d"
+    "5d26803eec4200741d505357268b1eee424f39fb730d"
     "268a07268605268807434febef5f5b5883c404ea18960000"
 )
-QUANTITY_EXIT_FARJMP_LOCAL_OFF = 0x2A  # offset within QUANTITY_EXIT_CAVE of the far-jmp's seg field
+QUANTITY_EXIT_FARJMP_LOCAL_OFF = 0x2C  # offset within QUANTITY_EXIT_CAVE of the far-jmp's seg field
 
 CAVES = [
     ("pen_advance", PEN_ADVANCE_CAVE),
@@ -456,14 +505,41 @@ def build_sites(cave_seg_raw, blob_offsets):
         # redirected to the functionally-identical bare `ret` at 0x9693
         # (the normal exit of the SAME function, after its "add sp,0x32"
         # -- 0x9693 is just the `ret` byte itself, landing there skips the
-        # add exactly like landing at 0x96e2 always did). Frees byte
-        # 0x96E2 -- the quantity-token exit site below needs it as its 5th
-        # byte and nothing else in the file references 0x96E2 once this is
-        # applied. Same-length operand swap, the lowest-risk patch
-        # category used throughout this file.
+        # add exactly like landing at 0x96e2 always did). Same-length
+        # operand swap, the lowest-risk patch category used throughout
+        # this file.
         sites.append(Site(
-            "draw_subtitle_body early-exit jc retarget (frees 0x96E2)",
+            "draw_subtitle_body early-exit jc retarget (1 of 2 refs to 0x96E2)",
             0x96ED, "72F3", lambda: bytes.fromhex("72A4"),
+        ))
+
+        # A SECOND, unrelated function also jumps to 0x96E2 -- an
+        # unconditional near jmp at 0xB3DD, found live: enabling only the
+        # jc-retarget above (assuming it was the only reference, per the
+        # original design comment here) reproduced a genuine reproducible
+        # in-game hang the very first time an actual quantity-token
+        # dialogue line was reached, confirmed NOT present in the
+        # same-dialogue baseline with both reversal flags off. Scanned the
+        # whole original EXE programmatically for every jmp/call whose
+        # target resolves to 0x96E2 (short/near/far forms) rather than
+        # trusting the single reference already known about -- found
+        # exactly this one additional hit. Whatever this other function is
+        # (not identified further -- not needed to fix this), it
+        # unconditionally reuses draw_subtitle_body's tail `ret` at 0x96E2
+        # as its own shared exit (a common size-optimisation in this
+        # codebase's era), so it always lands there, not just
+        # conditionally like the jc site. Once quantity_exit_cave's far
+        # call consumes 0x96E2 as its 5th byte, this jmp lands mid-far-call
+        # and executes garbage -- a delayed corrupt-now-hang-later failure
+        # exactly like the crash this session already root-caused and
+        # fixed once (relocation truncation) and again (DS-vs-ES scratch
+        # access) elsewhere in this same investigation. Same fix: redirect
+        # to the same clean 0x9693 target the jc site uses. Same-length
+        # rel16 operand swap (E9 <rel16>, 3B), computed programmatically
+        # from the live file, not by hand.
+        sites.append(Site(
+            "unrelated jmp retarget (2 of 2 refs to 0x96E2)",
+            0xB3DD, "E902E3", lambda: bytes.fromhex("E9B3E2"),
         ))
 
         # Quantity token exit, 0x96DE: `pop bp; jmp 0x9618` (4B) + the
@@ -605,8 +681,21 @@ def apply_patches(exe_path):
     if write_at + len(reloc_offsets) * 4 > MZ_HEADER_SIZE:
         sys.exit(f"{exe_path}: not enough header room for {len(reloc_offsets)} relocations.")
     for r in reloc_offsets:
-        # segment=0 so address == offset (the fixup site's own load offset).
-        struct.pack_into("<HH", data, write_at, r & 0xFFFF, 0x0000)
+        # (offset, segment) such that segment*16+offset == r (the fixup
+        # site's own load offset). For r < 0x10000 this is (r, 0), same as
+        # before. r CAN exceed 0x10000 for a relocation whose fixup site
+        # lives inside the appended cave blob (e.g. name_exit_cave's own
+        # internal far-jmp, past the 64KB mark for this file's size) --
+        # `offset=r & 0xFFFF, segment=0` silently truncated r in that case,
+        # pointing the fixup at the wrong (and unrelated) address while
+        # leaving the real far-jmp's segment field un-relocated at 0x0000
+        # -- i.e. a jmp far 0x0000:xxxx to the interrupt vector table,
+        # which is exactly the invalid-opcode/BIOS-int-6 hang this bug
+        # caused. Splitting off the >16-bit part into the segment half
+        # (paragraph-granular, so segment<<4 recombines exactly) fixes
+        # both the wrong-address write and the mis-relocated far-jmp.
+        hi, lo = divmod(r, 0x10000)
+        struct.pack_into("<HH", data, write_at, lo, hi << 12)
         print(f"[patch] +reloc for far-call seg field at load offset 0x{r:x}")
         write_at += 4
     struct.pack_into("<H", data, E_CRLC_OFFSET, e_crlc + len(reloc_offsets))
