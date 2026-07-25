@@ -253,7 +253,17 @@ PHRASE12_WIDE_LEN = 200
 # quantity-substitution tokens) -- these have no fixed source line to flip
 # since the actual number is computed at runtime, so this needs the same
 # unlocated engine copy/draw mechanism as the still-broken sietch name.
-COMMAND1_NATURAL_LINES = set(range(267, 275))
+#
+# 74 (translator's 1-based line 75, "show me 3 sietches you want me to go
+# to next..."): user reported reversed in-game. Noticed this line (and
+# its neighbor, translator line 74/index 73) has no trailing "#" padding,
+# unlike every other menu-option line around it (67-73, 76-83) -- a sign
+# it's drawn as a dialogue/notification-style message through the
+# RTL-patched draw_subtitle_body path rather than the plain LTR menu-list
+# draw, same category as the intro-narration range above. Not yet
+# confirmed in-game as of this comment; index 73 (the sibling line) not
+# yet reported broken but suspected to need the same fix.
+COMMAND1_NATURAL_LINES = set(range(267, 275)) | {74}
 
 
 def build_phrases():
