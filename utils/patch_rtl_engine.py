@@ -102,6 +102,15 @@ E_CRLC_OFFSET = 0x06
 
 JUSTIFY_FLIP = False  # flip the 0x97B6 justify pre-adjust add->sub (tuning)
 
+# Debugging toggles for the token-substitution reversal (sietch name /
+# occupation / digits): a full application of both caused a hang in-game
+# that isolated static analysis + an algorithm-level Python simulation
+# (see dune_rtl_engine_patch_moonshot memory) couldn't reproduce or
+# explain, so these let each half be tested independently to narrow down
+# which one is actually at fault before re-enabling both.
+ENABLE_NAME_REVERSAL = False
+ENABLE_QUANTITY_REVERSAL = False
+
 # ---------------------------------------------------------------------------
 # Cave blob: independent little routines the in-place far calls jump to.
 # Offsets within the blob are computed after their bytes are known.
@@ -173,11 +182,114 @@ CLEAR_CAVE = bytes.fromhex(
 # to subtract, so pen -= spacing. The remainder `inc dx` is kept as-is
 # (it enlarges the gap by 1px for some words, which is still what we want
 # when subtracting).
+# --- Token-substitution reversal caves (sietch name / occupation / digits) ---
+#
+# Root cause (found by static analysis of the token-expansion function at
+# load offset 0x9609, after `dosbox_continue`-based live tracing turned out
+# to be non-functional this session -- see dune_rtl_engine_patch_moonshot
+# memory): draw_subtitle_body's own byte-stream loop treats any high-bit
+# byte (0x80+ -- the ma-ml/m@@ name tokens AND the mq/mr quantity tokens)
+# as a mere word-boundary marker; the ACTUAL substitution happens earlier,
+# in 0x9609, which for a name token resolves a COMMAND1-table pointer and
+# copies its bytes FORWARD (stosb, si++/di++) into the phrase's output
+# buffer, and for a quantity token (0x9694) computes decimal digits
+# MOST-SIGNIFICANT-FIRST and also writes them forward via stosb. Both feed
+# the same buffer that draw_subtitle_body later draws via the RTL-patched
+# path -- so both come out backwards, for the same reason as everything
+# else this patch already fixes: natural/forward content drawn with a
+# leftward-walking pen reads reversed.
+#
+# Fix: bracket each substitution's write span. Two "entry mark" caves
+# record `di` (the buffer write position) in `[0x42EE]` (subtitle_line_
+# start_y, freed by the pen-seed patch alongside [0x42EC] -- both dead
+# fields recycled here) at the moment a substitution begins -- one for
+# name tokens (entered via 0x9647), one for quantity tokens (entered via
+# 0x9694, a different code path, so it needs its own marker). Two "exit"
+# caves each replace their token type's "done, resume the outer loop"
+# jump; if the RTL flag [0x42EC] is set, they reverse the bytes written
+# between the recorded start and the current `di` (ES-relative, matching
+# where stosb/lodsb actually read/write throughout this function) before
+# resuming.
+#
+# All four assembled with nasm (not hand-encoded -- this session already
+# cost real time to two separate hand-arithmetic mistakes elsewhere; see
+# dune_rtl_engine_patch_moonshot / feedback_dosbox_tracing_pitfalls) from:
+#
+#   entry_mark_cave:                      ; replaces 964D-9651 (5B)
+#       add     bp, 4                     ; replayed
+#       mov     si, ax                    ; replayed
+#       mov     word [0x42ee], di         ; NEW: record output-span start
+#       retf
+#
+#   qty_entry_mark_cave:                  ; replaces 969C-96A2 (7B)
+#       mov     ax, [bp+0]                ; replayed (original uses the
+#                                         ; longer disp16 encoding; this
+#                                         ; replay's shorter disp8 encoding
+#                                         ; is behaviourally identical)
+#       cmp     bl, 0x92                  ; replayed
+#       mov     word [0x42ee], di         ; NEW: record output-span start
+#       retf
+#
+#   name_exit_cave:                       ; replaces 967C-9680 (5B)
+#       mov     ds, [bp+2]                ; replayed
+#       cmp     byte [0x42ec], 0
+#       jz      .skip
+#       push ax / push bx / push di
+#       mov     bx, [0x42ee]              ; left = recorded start
+#       dec     di                        ; right = current end - 1
+#   .loop: cmp bx,di / jae .done
+#       mov al,[es:bx] / xchg al,[es:di] / mov [es:bx],al
+#       inc bx / dec di / jmp short .loop
+#   .done: pop di / pop bx / pop ax
+#   .skip:
+#       add     sp, 4                     ; discard far-call return addr
+#       jmp     0x0:0x9618                ; far jmp, seg relocated to main
+#
+#   quantity_exit_cave:                   ; replaces 96DE-96E2 (5B, incl.
+#                                          ; the freed byte at 96E2 -- see
+#                                          ; the jc-redirect patch below)
+#       pop     bp                        ; replayed
+#       <identical body to name_exit_cave from the cmp onward>
+ENTRY_MARK_CAVE = bytes.fromhex("83c50489c6893eee42cb")
+
+QTY_ENTRY_MARK_CAVE = bytes.fromhex("8b460080fb92893eee42cb")
+
+NAME_EXIT_CAVE = bytes.fromhex(
+    "8e5e02803eec4200741c5053578b1eee424f39fb730d"
+    "268a07268605268807434febef5f5b5883c404ea18960000"
+)
+NAME_EXIT_FARJMP_LOCAL_OFF = 0x2C  # offset within NAME_EXIT_CAVE of the far-jmp's seg field
+
+QUANTITY_EXIT_CAVE = bytes.fromhex(
+    "5d803eec4200741c5053578b1eee424f39fb730d"
+    "268a07268605268807434febef5f5b5883c404ea18960000"
+)
+QUANTITY_EXIT_FARJMP_LOCAL_OFF = 0x2A  # offset within QUANTITY_EXIT_CAVE of the far-jmp's seg field
+
 CAVES = [
     ("pen_advance", PEN_ADVANCE_CAVE),
     ("set", SET_CAVE),
     ("clear", CLEAR_CAVE),
 ]
+if ENABLE_NAME_REVERSAL:
+    CAVES += [
+        ("entry_mark", ENTRY_MARK_CAVE),
+        ("name_exit", NAME_EXIT_CAVE),
+    ]
+if ENABLE_QUANTITY_REVERSAL:
+    CAVES += [
+        ("qty_entry_mark", QTY_ENTRY_MARK_CAVE),
+        ("quantity_exit", QUANTITY_EXIT_CAVE),
+    ]
+
+# Caves whose own bytes contain a far-jmp-back-to-main needing its OWN
+# relocation entry (segment field, relative to that cave's position once
+# placed in the blob). (cave_name, local_offset_of_seg_field).
+CAVE_INTERNAL_FARJMPS = []
+if ENABLE_NAME_REVERSAL:
+    CAVE_INTERNAL_FARJMPS.append(("name_exit", NAME_EXIT_FARJMP_LOCAL_OFF))
+if ENABLE_QUANTITY_REVERSAL:
+    CAVE_INTERNAL_FARJMPS.append(("quantity_exit", QUANTITY_EXIT_FARJMP_LOCAL_OFF))
 
 
 def build_blob():
@@ -240,6 +352,10 @@ def build_sites(cave_seg_raw, blob_offsets):
     pa = blob_offsets["pen_advance"]
     setc = blob_offsets["set"]
     clr = blob_offsets["clear"]
+    em = blob_offsets.get("entry_mark")
+    qem = blob_offsets.get("qty_entry_mark")
+    ne = blob_offsets.get("name_exit")
+    qe = blob_offsets.get("quantity_exit")
 
     sites = []
 
@@ -296,6 +412,74 @@ def build_sites(cave_seg_raw, blob_offsets):
         0x9833, "891650FC", lambda: bytes.fromhex("291650FC"),
     ))
 
+    # --- Token-substitution reversal (sietch name / occupation / digits) ---
+    # See the CAVES section above for full derivation. Gated behind
+    # ENABLE_NAME_REVERSAL / ENABLE_QUANTITY_REVERSAL (see their
+    # definitions) while debugging an in-game hang neither static analysis
+    # nor an algorithm-level simulation could explain -- applying each
+    # half independently narrows down which one is actually at fault.
+
+    if ENABLE_NAME_REVERSAL:
+        # Name/m@@ token entry, 0x964D: `add bp,4; mov si,ax` (5B) -> far
+        # call entry_mark_cave (replays both, marks di as the output-span
+        # start).
+        sites.append(Site(
+            "name-token entry mark (records output-span start)",
+            0x964D, "83C504" "8BF0",
+            (lambda o=em: far_call(cave_seg_raw, o)),
+            reloc_field_rel=3,
+        ))
+
+        # Name/m@@ token exit, 0x967C: `mov ds,[bp+2]; jmp short 0x9618`
+        # (5B) -> far call name_exit_cave (replays the DS restore,
+        # conditionally reverses the output span, far-jmps back to 0x9618).
+        sites.append(Site(
+            "name-token exit (conditional reversal)",
+            0x967C, "8E5E02" "EB97",
+            (lambda o=ne: far_call(cave_seg_raw, o)),
+            reloc_field_rel=3,
+        ))
+
+    if ENABLE_QUANTITY_REVERSAL:
+        # Quantity token entry, 0x969C: `mov ax,[bp+0]` (long disp16
+        # encoding, 4B) + `cmp bl,0x92` (3B) = 7B -> far call
+        # qty_entry_mark_cave + 2 nops (replays both, marks di as the
+        # output-span start).
+        sites.append(Site(
+            "quantity-token entry mark (records output-span start)",
+            0x969C, "8B860000" "80FB92",
+            (lambda o=qem: far_call(cave_seg_raw, o) + b"\x90\x90"),
+            reloc_field_rel=3,
+        ))
+
+        # draw_subtitle_body's own early-exit `jc 0x96e2` (at 0x96ED) is
+        # redirected to the functionally-identical bare `ret` at 0x9693
+        # (the normal exit of the SAME function, after its "add sp,0x32"
+        # -- 0x9693 is just the `ret` byte itself, landing there skips the
+        # add exactly like landing at 0x96e2 always did). Frees byte
+        # 0x96E2 -- the quantity-token exit site below needs it as its 5th
+        # byte and nothing else in the file references 0x96E2 once this is
+        # applied. Same-length operand swap, the lowest-risk patch
+        # category used throughout this file.
+        sites.append(Site(
+            "draw_subtitle_body early-exit jc retarget (frees 0x96E2)",
+            0x96ED, "72F3", lambda: bytes.fromhex("72A4"),
+        ))
+
+        # Quantity token exit, 0x96DE: `pop bp; jmp 0x9618` (4B) + the
+        # now-freed `ret` at 0x96E2 (1B) = 5B -> far call
+        # quantity_exit_cave (replays the bp pop, conditionally reverses
+        # the output span, far-jmps back to 0x9618). MUST be applied
+        # together with the jc-retarget site above (both refuse/no-op
+        # idempotently as a pair, same as every other multi-site group in
+        # this file).
+        sites.append(Site(
+            "quantity-token exit (conditional reversal; consumes freed 0x96E2)",
+            0x96DE, "5D" "E936FF" "C3",
+            (lambda o=qe: far_call(cave_seg_raw, o)),
+            reloc_field_rel=3,
+        ))
+
     # Optional: justify pre-adjust 0x97B6 add->sub.
     if JUSTIFY_FLIP:
         sites.append(Site(
@@ -318,17 +502,27 @@ def compute_blob_layout(load_module_len):
 
 
 def detect_patched(data):
-    """Return True if the pen-advance sites already hold our far call to a
-    blob whose bytes match. (Read back from disk, not recomputed from length.)"""
-    for off in (0xCB18, 0xCBB2):
+    """Return True if the pen-advance sites AND the (newer) name-token
+    entry-mark site already hold far calls to blobs with matching bytes.
+    (Read back from disk, not recomputed from length.) Checking a site from
+    each generation of this script avoids a false "already patched" on a
+    file only an OLDER version of this script touched (e.g. one without
+    the token-substitution reversal caves), which would otherwise cause
+    apply_patches to skip installing the sites this version adds."""
+    checks = [(0xCB18, PEN_ADVANCE_CAVE), (0xCBB2, PEN_ADVANCE_CAVE)]
+    if ENABLE_NAME_REVERSAL:
+        checks.append((0x964D, ENTRY_MARK_CAVE))
+    if ENABLE_QUANTITY_REVERSAL:
+        checks.append((0x969C, QTY_ENTRY_MARK_CAVE))
+    for off, expected in checks:
         fo = MZ_HEADER_SIZE + off
-        cur = bytes(data[fo:fo + 6])
-        if cur[0] != 0x9A or cur[5] != 0x90:
+        cur = bytes(data[fo:fo + 5])
+        if cur[0] != 0x9A:
             return False
         cave_off = struct.unpack_from("<H", cur, 1)[0]
         cave_seg_raw = struct.unpack_from("<H", cur, 3)[0]
         cave_file = MZ_HEADER_SIZE + cave_seg_raw * 16 + cave_off
-        if bytes(data[cave_file:cave_file + len(PEN_ADVANCE_CAVE)]) != PEN_ADVANCE_CAVE:
+        if bytes(data[cave_file:cave_file + len(expected)]) != expected:
             return False
     return True
 
@@ -377,8 +571,15 @@ def apply_patches(exe_path):
           f"0x{blob_load_offset:x} (segment raw 0x{cave_seg_raw:x}); caves at "
           + ", ".join(f"{n}=+0x{o:x}" for n, o in blob_offsets.items()))
 
-    # 2. In-place patches; collect relocation field offsets.
+    # 2. In-place patches; collect relocation field offsets. Starts with
+    # the blob-internal far-jmp-back-to-main sites (name_exit_cave and
+    # quantity_exit_cave each jump to 0x0:0x9618 with the segment half
+    # needing the same load-time fixup as every other far-call/jmp here).
     reloc_offsets = []
+    for cave_name, local_off in CAVE_INTERNAL_FARJMPS:
+        seg_field_load_offset = blob_load_offset + blob_offsets[cave_name] + local_off
+        reloc_offsets.append(seg_field_load_offset)
+        print(f"[patch] {cave_name} internal far-jmp seg field @ load offset 0x{seg_field_load_offset:x}")
     for s in sites:
         new = s.new_builder()
         data[s.file_offset:s.file_offset + len(new)] = new
