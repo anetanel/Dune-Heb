@@ -230,7 +230,20 @@ PHRASE12_WIDE_LEN = 200
 #    (that range boundary may be off, or 23 was never really a site slot)
 #    -- STILL NEEDS in-game map-screen verification that no location label
 #    broke from this change.
-COMMAND1_NATURAL_LINES = set(range(267, 275)) | {23, 103}
+#  - 196-199: a 4-value troop skill-rank enum ("בתקופת מבחן"/"טירונים"/
+#    "ממוצעים"/"יעילים" -- probation/recruit/average/efficient), same
+#    substitution pattern as occupation/duration, found the same way
+#    (searched COMMAND1 for the exact phrase the user reported reversed).
+#    All four made natural together since they're the same token slot's
+#    possible values. Not yet confirmed in-game (only 196 has been seen
+#    live so far).
+#
+# NOT fixable this way: the same troop-status screen also showed reversed
+# RUNTIME-COMPUTED DIGITS (a troop count and a percentage, via "mq"/"mr"
+# quantity-substitution tokens) -- these have no fixed source line to flip
+# since the actual number is computed at runtime, so this needs the same
+# unlocated engine copy/draw mechanism as the still-broken sietch name.
+COMMAND1_NATURAL_LINES = set(range(267, 275)) | {23, 103} | set(range(196, 200))
 
 
 def build_phrases():
