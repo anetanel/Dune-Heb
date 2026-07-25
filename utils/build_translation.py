@@ -204,14 +204,18 @@ def ensure_english_txt(name):
 PHRASE12_WIDE_LINES = {421, 422, 423, 424}
 PHRASE12_WIDE_LEN = 200
 
-# COMMAND1's intro-narration lines are drawn through the same subtitle
-# system (draw_subtitle_body) as PHRASE dialogue, which the RTL engine
-# patch makes draw right-to-left -- so their content must be natural
-# order (digit runs mirrored), NOT pre-reversed like COMMAND1's menu/UI
-# labels (a different, still-LTR draw path). See dune_rtl_engine_patch_
-# moonshot. Line 268 (0-based) is the first intro slide; extend this set
-# to the rest of the narration block as each is verified in-game.
-COMMAND1_NATURAL_LINES = {268}
+# COMMAND1 stays entirely pre-reversed (reverse_only). Both of its text
+# audiences are drawn left-to-right: the menu/UI labels go through
+# font_draw_glyph_func with the RTL flag clear (LTR), and the intro
+# narration is drawn by the cinematic player's OWN glyph routine, which
+# the RTL engine patch never touches (its draws don't hit our patched
+# font_draw_glyph_func at all -- confirmed: natural-order intro content
+# rendered reversed in-game, i.e. drawn LTR). So the old pre-reversal is
+# what makes both read correctly; only PHRASE11/12 (spoken dialogue, drawn
+# through the patched draw_subtitle_body) are fed natural order. The
+# natural_lines hook is kept available for any COMMAND1 line later found
+# to go through the patched RTL path, but none currently do.
+COMMAND1_NATURAL_LINES = set()
 
 
 def build_phrases():
