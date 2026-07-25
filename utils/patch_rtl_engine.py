@@ -157,22 +157,26 @@ CLEAR_CAVE = bytes.fromhex(
     "CB"          # retf  (back to 0x9870 in main; 0x9874 `ret` does the rest)
 )
 
-# space_cave: inter-word advance. On entry dx = space width. Compute
-# dx = pen - width so the pen walks LEFT. Reached from the 0x9822 hook;
-# returns to 0x9827. (The paired push/pop dx are removed by the in-place
-# patches, so the cave neither pushes nor pops.)
-SPACE_CAVE = bytes.fromhex(
-    "8B0650FC"    # mov ax,[0xfc50]
-    "2BC2"        # sub ax,dx             (ax = pen - width)
-    "8BD0"        # mov dx,ax
-    "CB"          # retf
-)
-
+# Inter-word space advance is flipped IN PLACE, no cave. The original
+# sequence at 0x9822 is:
+#     push dx            ; dx currently = the line's inter-word spacing
+#     add dx,[0xfc50]    ; dx = spacing + pen
+#     ...remainder tweak (inc dx)...
+#     mov [0xfc50],dx    ; pen += spacing
+#     pop dx             ; restore spacing
+# The push/pop are load-bearing: font_draw_glyph_func preserves dx across
+# every glyph, so `dx = spacing` must survive the whole line for the 2nd,
+# 3rd, ... space to advance correctly. (An earlier version replaced the
+# push and nop'd the pop, which left dx = garbage after the first space and
+# made later words pile up.) For RTL we keep push/pop and only change the
+# arithmetic: neutralise the `+pen` (dx stays = spacing) and flip the store
+# to subtract, so pen -= spacing. The remainder `inc dx` is kept as-is
+# (it enlarges the gap by 1px for some words, which is still what we want
+# when subtracting).
 CAVES = [
     ("pen_advance", PEN_ADVANCE_CAVE),
     ("set", SET_CAVE),
     ("clear", CLEAR_CAVE),
-    ("space", SPACE_CAVE),
 ]
 
 
@@ -236,7 +240,6 @@ def build_sites(cave_seg_raw, blob_offsets):
     pa = blob_offsets["pen_advance"]
     setc = blob_offsets["set"]
     clr = blob_offsets["clear"]
-    spc = blob_offsets["space"]
 
     sites = []
 
@@ -277,25 +280,20 @@ def build_sites(cave_seg_raw, blob_offsets):
         reloc_field_rel=3,
     ))
 
-    # SPACE hook 0x9822: `push dx; add dx,[0xfc50]` (5 bytes)
-    # -> far call space_cave (dx = pen - width).
+    # SPACE advance, flipped in place (keeps the load-bearing push/pop dx
+    # at 0x9822/0x9837 that carry the line's spacing across every glyph):
+    #   0x9823 `add dx,[0xfc50]` (dx = spacing + pen) -> 4 NOPs (dx stays
+    #          = spacing), and
+    #   0x9833 `mov [0xfc50],dx` (pen = spacing + pen) -> `sub [0xfc50],dx`
+    #          (pen -= spacing).
+    # 0x982E `inc dx` and the 0x9822/0x9837 push/pop are left untouched.
     sites.append(Site(
-        "space advance -> RTL (subtract width)",
-        0x9822, "52" "031650FC",
-        (lambda o=spc: far_call(cave_seg_raw, o)),
-        reloc_field_rel=3,
+        "space add+pen neutralised (dx stays = spacing)",
+        0x9823, "031650FC", lambda: b"\x90\x90\x90\x90",
     ))
-
-    # SPACE remainder distribution 0x982E: inc dx -> dec dx.
     sites.append(Site(
-        "space remainder inc->dec (RTL)",
-        0x982E, "42", lambda: b"\x4A",
-    ))
-
-    # SPACE paired pop 0x9837: pop dx -> nop (the matching push was removed).
-    sites.append(Site(
-        "space paired pop dx -> nop",
-        0x9837, "5A", lambda: b"\x90",
+        "space store -> subtract (pen -= spacing, RTL)",
+        0x9833, "891650FC", lambda: bytes.fromhex("291650FC"),
     ))
 
     # Optional: justify pre-adjust 0x97B6 add->sub.

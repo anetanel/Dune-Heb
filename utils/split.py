@@ -269,43 +269,64 @@ def mirror_digit_runs(line):
     return bytes(out)
 
 
+# A single laid-out subtitle line the engine builds is small; but its line
+# buffer is fixed-size, so an absurdly long unbroken run can overflow it
+# (this is what crashed an early native-RTL test on a 277-byte line). We
+# don't pre-*wrap* anymore -- the patched engine word-wraps each line to
+# the real box width itself, which is the whole point -- but we still cap
+# the length of any single unbroken run by force-inserting engine line
+# breaks (\r) at safe word boundaries only when a run gets dangerously
+# long. Normal dialogue lines never hit this; it's purely a guard rail.
+NATURAL_RUN_LIMIT = 160  # bytes; well above any real dialogue line, below overflow
+
+
+def _cap_long_runs(line):
+    """Insert a \\r at a word boundary whenever an unbroken run (no existing
+    \\r) would exceed NATURAL_RUN_LIMIT bytes, so the engine's fixed line
+    buffer never overflows. Leaves everything else untouched."""
+    out = bytearray()
+    run = 0
+    last_space = None  # index in `out` of the most recent space in this run
+    for b in line:
+        if b == 0x0d:  # existing engine break resets the run
+            out.append(b)
+            run = 0
+            last_space = None
+            continue
+        out.append(b)
+        run += 1
+        if b == 0x20:
+            last_space = len(out) - 1
+        if run >= NATURAL_RUN_LIMIT and last_space is not None:
+            out[last_space] = 0x0d  # promote that space to a line break
+            run = len(out) - 1 - last_space
+            last_space = None
+    return bytes(out)
+
+
 def create_natural_line(line):
     """Prepare `line` for the native-RTL dialogue engine (see
-    dune_rtl_engine_patch_moonshot project memory): still pre-wrapped in
-    Python via the same find_split word-wrap used by create_new_line
-    (proven safe at LINE_LENGTH -- see dune_line_length_measurement), just
-    without the old scheme's per-line byte reversal or '#' padding, since
-    the patched drawer now advances its pen right-to-left through each
-    line's bytes in stream order directly and the engine handles its own
-    right-alignment.
+    dune_rtl_engine_patch_moonshot project memory): feed the engine the
+    natural, reading-order bytes and let its own layout_subtitle_lines
+    word-wrap them to the real box width at runtime from exact per-glyph
+    widths -- no Python-side pre-wrapping, no per-line byte reversal, no
+    '#' padding. This is the moonshot's actual payoff: split.py's guessed
+    width tables (CHAR_WIDTH/LOCATION_TOKEN_WIDTH/...) are no longer used
+    for these lines. Pre-wrapping here was tried as a crash workaround but
+    it wrapped to a guessed width that didn't match the real bubble, so
+    lines overflowed/were cut off in-game; _cap_long_runs replaces it as a
+    pure overflow guard that only acts on pathologically long runs.
 
-    A prior version of this function skipped word-wrap entirely, trusting
-    the patched engine's own layout_subtitle_lines to compute exact wrap
-    points at runtime from real per-glyph font widths -- true in principle
-    (confirmed by disassembly), but it turned out unsafe in practice: fed
-    a 277-byte unbroken line (more than double the longest chunk this
-    engine had ever been asked to lay out via the old always-pre-wrapped
-    path), the game crashed with CS hijacked (buffer overflow signature
-    matching dune_dialogue_crash_2026_07_25's unrelated earlier crash) and
-    visibly overlapping/garbled glyphs even before the crash. Pre-wrapping
-    here avoids ever handing the engine a line longer than what's already
-    been exercised safely, at the cost of the "table-free" purity part of
-    the moonshot's original goal -- CHAR_WIDTH/LOCATION_TOKEN_WIDTH/etc.
-    are still used for the wrap-point decision, just not for a final
-    per-line reversal. The one remaining reversal is digit runs; see
-    mirror_digit_runs.
+    The only transform is digit-run mirroring (numerals read left-to-right
+    even in RTL flow; see mirror_digit_runs).
 
-    Only valid for content actually drawn through the patched dialogue/
-    subtitle-box path (regular PHRASE11/PHRASE12 lines) -- NOT for
-    COMMAND1 (menus/UI, a different unpatched draw routine, stays on
-    reverse_only()) or PHRASE12's --wide-lines encyclopedia entries (also
-    drawn through a different, unpatched path -- keep using
-    create_wrapped_sentence_line for those).
+    Only valid for content drawn through the patched dialogue/subtitle-box
+    path (regular PHRASE11/PHRASE12 lines) -- NOT for COMMAND1 menu/UI
+    labels (a different unpatched draw routine, stays on reverse_only())
+    or PHRASE12's --wide-lines encyclopedia entries (create_wrapped_
+    sentence_line).
     """
-    units = scan_units(line)
-    split_location = find_split(units)
-    wrapped = split_and_reverse(split_location, units, reverse=False, pad=False)
-    return mirror_digit_runs(wrapped)
+    return mirror_digit_runs(_cap_long_runs(line))
 
 
 if __name__ == "__main__":
