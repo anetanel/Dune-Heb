@@ -213,37 +213,47 @@ PHRASE12_WIDE_LEN = 200
 # by font_draw_glyph_func with the RTL flag clear (plain LTR) -- stays
 # pre-reversed. So only this narration block is natural.
 #
-# EXPERIMENTAL: PHRASE12 line 248's Fremen troop-status template embeds
-# COMMAND1-sourced substitutions (the "md"/"me" single-byte tokens -- an
-# occupation name and a duration string) directly into an otherwise-natural
-# dialogue line, drawn via the same RTL path. The exact engine copy/expand
-# mechanism wasn't located (extensive search -- see dune_rtl_engine_patch_
-# moonshot memory), so these indices were found empirically:
-#  - 103: "duration" text ("ליום אחד" / "for one day") -- CONFIRMED fixed
-#    in-game by the user.
-#  - 23: "occupation" text ("כריית סם" / "spice mining") -- first tried the
-#    duplicate entry at index 35 (outside the confirmed map-shared area/
-#    site range 0-23, so lower-risk a priori), but the user confirmed in-
-#    game that did NOT fix the occupation substitution -- it must be index
-#    23 instead. This means index 23 is NOT actually part of the map's
-#    area/site name table despite falling inside the documented 0-23 range
-#    (that range boundary may be off, or 23 was never really a site slot)
-#    -- STILL NEEDS in-game map-screen verification that no location label
-#    broke from this change.
-#  - 196-199: a 4-value troop skill-rank enum ("בתקופת מבחן"/"טירונים"/
-#    "ממוצעים"/"יעילים" -- probation/recruit/average/efficient), same
-#    substitution pattern as occupation/duration, found the same way
-#    (searched COMMAND1 for the exact phrase the user reported reversed).
-#    All four made natural together since they're the same token slot's
-#    possible values. Not yet confirmed in-game (only 196 has been seen
-#    live so far).
+# EXPERIMENTAL, SUPERSEDED 2026-07-25 (RTL-engine-patch session, after
+# name-token reversal went unconditional): PHRASE12 line 248's Fremen
+# troop-status template embeds COMMAND1-sourced substitutions (the
+# "md"/"me" single-byte tokens -- an occupation name and a duration
+# string) directly into an otherwise-natural dialogue line, drawn via the
+# same RTL path. These substitutions go through the SAME entry_mark/
+# name_exit engine mechanism as the sietch-name (ma/mb) tokens (confirmed
+# live: read the actual copied bytes out of the output buffer during a
+# name_exit hit and decoded "כריית סם" straight out of it). Indices 23,
+# 35 (occupation duplicate), 103 (duration), and 196-199 (skill-rank
+# enum) were previously marked NATURAL here and each separately
+# "confirmed fixed in-game" -- but every one of those confirmations
+# happened while entry_mark/name_exit's reversal was flag-gated on
+# [0x42EC] and (per this session's live tracing, see
+# dune_rtl_engine_patch_moonshot) NEVER actually fired -- so "natural
+# source + reversal never fires" happened to look right by the same
+# lucky double-negative that made the sietch name LOOK okay too, before
+# the user caught that it wasn't. Now that the reversal is unconditional
+# (the actual, correct fix for dialogue), natural-marked source gets
+# double-flipped and comes out reversed again -- reproduced live for
+# occupation (35) this session. Reverted all of these back to their
+# ordinary pre-reversed state (removed from this set entirely) to match
+# how the sietch-name table itself has always worked: pre-reversed
+# source, reversed back to natural at dialogue-draw time by the
+# (now-unconditional) entry_mark/name_exit caves. NOT YET RE-VERIFIED
+# in-game as of this comment -- occupation was the one concretely
+# reported broken; duration/skill-rank are reverted on the same
+# reasoning but unconfirmed. Also not yet re-checked: whether any of
+# 23/35/103/196-199 are ALSO read by some OTHER, non-dialogue (LTR menu)
+# context that would need them to stay natural -- if reverting this
+# breaks the troop-status MENU screen's own display of these values,
+# that's evidence of a real per-context conflict needing the same kind
+# of solution the sietch name eventually needed (map vs dialogue), not
+# just a blanket revert.
 #
 # NOT fixable this way: the same troop-status screen also showed reversed
 # RUNTIME-COMPUTED DIGITS (a troop count and a percentage, via "mq"/"mr"
 # quantity-substitution tokens) -- these have no fixed source line to flip
 # since the actual number is computed at runtime, so this needs the same
 # unlocated engine copy/draw mechanism as the still-broken sietch name.
-COMMAND1_NATURAL_LINES = set(range(267, 275)) | {23, 103} | set(range(196, 200))
+COMMAND1_NATURAL_LINES = set(range(267, 275))
 
 
 def build_phrases():
