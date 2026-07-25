@@ -236,11 +236,6 @@ possible at all:
 
 ## Boundaries
 
-- Don't reproduce or quote the game's dialogue/story text in commits, PRs,
-  commit messages, or conversation — it's copyrighted content. Byte-level or
-  structural analysis (control-code patterns, line counts, hex/md5 values) is
-  fine; the English/Hebrew sentences themselves are not something to
-  transcribe into documentation, code comments, or chat output.
 - Treat any editorial decision about the translated text itself (word
   choice, where a line break goes, tone) as the translator's call — scripts
   should only ever apply mechanical, format-level transformations that are
