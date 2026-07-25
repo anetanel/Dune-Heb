@@ -109,12 +109,20 @@ JUSTIFY_FLIP = False  # flip the 0x97B6 justify pre-adjust add->sub (tuning)
 
 # pen_advance_cave: replaces `add [0xFC50],ax; mov cl,al` in both
 # font_draw_glyph_func bodies. Subtract (RTL) iff [0x42EC]!=0.
+# font_get_draw_position has just loaded dx = pen_x (= [0xfc50]) and the
+# glyph is blitted at that dx AFTER this cave runs. For LTR the pen is the
+# glyph's LEFT edge (draw at dx, then pen += width). For RTL we want the
+# glyph's RIGHT edge at the pen, so we both retreat the pen (pen -= width)
+# AND move the blit position dx left by the same width -- otherwise the
+# glyph is blitted with its left edge at the pen and the whole line is
+# shoved one glyph-width to the right, spilling past the box's right edge.
 PEN_ADVANCE_CAVE = bytes.fromhex(
     "803EEC4200"  # cmp byte [0x42ec],0
-    "7406"        # jz +6 (to the add branch)
-    "290650FC"    # sub [0xfc50],ax        (RTL)
+    "7408"        # jz +8 (to the add branch)
+    "290650FC"    # sub [0xfc50],ax        (RTL: pen -= width)
+    "2BD0"        # sub dx,ax              (RTL: blit position -= width)
     "EB04"        # jmp +4 (skip add)
-    "010650FC"    # add [0xfc50],ax        (LTR, original)
+    "010650FC"    # add [0xfc50],ax        (LTR, original: pen += width, dx unchanged)
     "8AC8"        # mov cl,al              (replayed displaced instruction)
     "CB"          # retf
 )

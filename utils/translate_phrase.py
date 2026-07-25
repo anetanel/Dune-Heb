@@ -45,7 +45,7 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def reverse_only(encoded_bytes, english_bytes=None):
+def reverse_only(encoded_bytes, english_bytes=None, natural_lines=frozenset()):
     """Reverse each line in place, with no word-wrap and no added \\r.
 
     Used for files like COMMAND1 whose entries are short UI labels: the
@@ -69,6 +69,15 @@ def reverse_only(encoded_bytes, english_bytes=None):
     breaks -- confirmed on COMMAND1 line 267, whose translator-reversed
     copy was also 1 byte short, misaligning every subsequent 10-byte
     time-slot the save-game screen looks up by fixed offset.
+
+    `natural_lines`: 0-based indices of lines that are drawn through the
+    RTL-patched draw_subtitle_body path (e.g. COMMAND1's intro narration,
+    which uses the same subtitle system as PHRASE dialogue -- NOT the
+    menu/UI draw path the short labels use). Those lines are left in
+    natural reading order with only their digit runs mirrored (same
+    treatment split.py's --rtl-native mode gives PHRASE lines), instead of
+    fully reversed -- see the dune_rtl_engine_patch_moonshot memory for
+    why the two draw paths need opposite content order.
     """
     lines = encoded_bytes.split(b"\n")
     english_lines = english_bytes.split(b"\n") if english_bytes is not None else []
@@ -76,13 +85,15 @@ def reverse_only(encoded_bytes, english_bytes=None):
     for i, line in enumerate(lines):
         if i < len(english_lines) and line == english_lines[i]:
             out.append(line)
+        elif i in natural_lines:
+            out.append(heb_split.mirror_digit_runs(line))
         else:
             out.append(b"".join(reversed(heb_split.scan_units(line))))
     return b"\n".join(out)
 
 
 def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=None,
-                  wide_lines=None, wide_len=None, rtl_native=False):
+                  wide_lines=None, wide_len=None, rtl_native=False, natural_lines=frozenset()):
     """Run the full pipeline for one phrase/command file, returning the output path.
 
     wide_lines: 0-based line numbers within this file to word-wrap at
@@ -124,7 +135,8 @@ def build_phrase(phrase_name, heb_path, english_path, no_split=False, out_dir=No
 
     if no_split:
         print(f"[2/4] reversing lines (no word-wrap) -> {split_bin}")
-        split_bin.write_bytes(reverse_only(encoded_txt.read_bytes(), Path(english_path).read_bytes()))
+        split_bin.write_bytes(reverse_only(encoded_txt.read_bytes(), Path(english_path).read_bytes(),
+                                            natural_lines=natural_lines))
     else:
         print(f"[2/4] splitting/reversing lines -> {split_bin}")
         cmd = [sys.executable, str(SPLIT_SCRIPT), "--input", str(encoded_txt), "--output", str(split_bin)]

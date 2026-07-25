@@ -204,19 +204,29 @@ def ensure_english_txt(name):
 PHRASE12_WIDE_LINES = {421, 422, 423, 424}
 PHRASE12_WIDE_LEN = 200
 
+# COMMAND1's intro-narration lines are drawn through the same subtitle
+# system (draw_subtitle_body) as PHRASE dialogue, which the RTL engine
+# patch makes draw right-to-left -- so their content must be natural
+# order (digit runs mirrored), NOT pre-reversed like COMMAND1's menu/UI
+# labels (a different, still-LTR draw path). See dune_rtl_engine_patch_
+# moonshot. Line 268 (0-based) is the first intro slide; extend this set
+# to the rest of the narration block as each is verified in-game.
+COMMAND1_NATURAL_LINES = {268}
+
 
 def build_phrases():
     outputs = []
-    for name, no_split, wide_lines, wide_len, rtl_native in [
-        ("PHRASE11", False, None, None, True),
-        ("PHRASE12", False, PHRASE12_WIDE_LINES, PHRASE12_WIDE_LEN, True),
-        ("COMMAND1", True, None, None, False),
+    for name, no_split, wide_lines, wide_len, rtl_native, natural_lines in [
+        ("PHRASE11", False, None, None, True, frozenset()),
+        ("PHRASE12", False, PHRASE12_WIDE_LINES, PHRASE12_WIDE_LEN, True, frozenset()),
+        ("COMMAND1", True, None, None, False, COMMAND1_NATURAL_LINES),
     ]:
         heb_path = REPO_ROOT / "translations" / f"{name}.HEB"
         english_path = ensure_english_txt(name)
         outputs.append(translate_phrase.build_phrase(
             name, heb_path, english_path, no_split=no_split,
-            wide_lines=wide_lines, wide_len=wide_len, rtl_native=rtl_native))
+            wide_lines=wide_lines, wide_len=wide_len, rtl_native=rtl_native,
+            natural_lines=natural_lines))
     return outputs
 
 
