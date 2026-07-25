@@ -8,6 +8,9 @@
 # Generated pipeline output (translate_phrase.py / build_translation.py)
 /tmp/
 
+# Scratch dosbox-mcp screenshots
+/capture/
+
 # Editor / IDE
 .idea/
 

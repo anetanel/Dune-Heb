@@ -202,12 +202,18 @@ def ensure_english_txt(name):
     return english_path
 
 
-# PHRASE12 lines 422-425 (0-based 421-424) are encyclopedia entries, not
-# spoken dialogue -- they use a wider box than the dialogue box's
-# LINE_LENGTH, so word-wrap them at PHRASE12_WIDE_LEN instead, with a
-# forced line break at each sentence boundary.
-PHRASE12_WIDE_LINES = {421, 422, 423, 424}
-PHRASE12_WIDE_LEN = 200
+# PHRASE12's encyclopedia entries (0-based lines 421 on -- the History-book
+# articles, a wider box than the dialogue box) were previously special-cased
+# onto split.py's old word-wrap-then-full-reverse scheme, on the assumption
+# that they're drawn by a separate, unpatched LTR routine. In-game testing
+# proved that wrong: they're drawn by the same RTL-patched draw_subtitle_body
+# as regular dialogue (old-reversed content fed to the RTL-native pen came
+# out double-mirrored -- e.g. "פול" rendered as "לוף"). So they now go
+# through the same rtl_native/create_natural_line path as the rest of
+# PHRASE12 -- no wide_lines/wide_len special-casing needed. The engine's own
+# layout_subtitle_lines wraps to the real (wider) box width at runtime from
+# actual glyph widths, and the M-marker (\r) sentence breaks already present
+# in the source still force line breaks, same as everywhere else.
 
 # COMMAND1's intro narration (0-based indices 267-274, == the translator's
 # 1-based lines 268-275) IS drawn through the same RTL-patched subtitle
@@ -268,14 +274,29 @@ PHRASE12_WIDE_LEN = 200
 # draw, same category as the intro-narration range above. Not yet
 # confirmed in-game as of this comment; index 73 (the sibling line) not
 # yet reported broken but suspected to need the same fix.
-COMMAND1_NATURAL_LINES = set(range(267, 275)) | {74}
+#
+# 230-235, 237, 244-245 (translator's 1-based lines 231-236, 238, 245-246):
+# the History-book "quote" entries' speaker-attribution headers ("Duncan
+# Idaho said to Paul:", "Chani said to Paul:", etc.) -- these entries pair
+# a COMMAND1 attribution line with a PHRASE11/PHRASE12 quote line on the
+# same rendered page, both through draw_subtitle_body. User reported line
+# 234 ("דונקן איידהו אמר לפול:") rendering reversed while the paired
+# PHRASE11 line 257 quote text (already rtl_native) rendered correctly --
+# same signature as index 74 above: these lines have no trailing "#"
+# padding, unlike ordinary padded menu-list options. Same fix applied to
+# the whole set of attribution headers in this block (231-236, 238,
+# 245-246), not just the one reported line, since they're structurally
+# identical. 236/239-243 are blank placeholder lines, skipped.
+COMMAND1_NATURAL_LINES = (
+    set(range(267, 275)) | {74} | {230, 231, 232, 233, 234, 235, 237, 244, 245}
+)
 
 
 def build_phrases():
     outputs = []
     for name, no_split, wide_lines, wide_len, rtl_native, natural_lines in [
         ("PHRASE11", False, None, None, True, frozenset()),
-        ("PHRASE12", False, PHRASE12_WIDE_LINES, PHRASE12_WIDE_LEN, True, frozenset()),
+        ("PHRASE12", False, None, None, True, frozenset()),
         ("COMMAND1", True, None, None, False, COMMAND1_NATURAL_LINES),
     ]:
         heb_path = REPO_ROOT / "translations" / f"{name}.HEB"
