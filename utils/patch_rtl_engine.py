@@ -58,29 +58,88 @@ is actually drawing its glyphs, and flip the space advance to match:
   RIGHT edge (the reorder patch below), and every line reseeds from it, so
   each line starts at the right edge and the flipped advances walk left.
 
-All hooks that move engine code into the appended cave segment use only
-DS-relative or register operations (never a near call/jmp back into the
-main code segment, which the cave -- a separate appended segment -- cannot
-reach), so no far-return-into-main gymnastics are needed except the two
-explicit stack fixups documented at the caves.
-
-The appended cave segment is reached by 16-bit far calls (a near call can't
-address past the 0xFFFF real-mode segment limit from CS=0); each far call's
-segment half gets a new MZ relocation-table entry so the loader fixes it up
-to the real load segment at run time. The file grows by the cave blob;
-e_cblp (bytes-in-last-page) and e_crlc (relocation count) are updated. The
-relocation entry format was verified against the program's own DS=SS=ES
-startup immediate (entry 0 = offset 2 / segment 1 -> load addr 0x12,
-matching the `mov ax,0xECF` operand at load offset 0x12).
+All hooks that move engine code into the cave use only DS-relative or
+register operations (never a near call/jmp back into the main code
+segment, which the cave -- living in a separate process's memory, see
+below -- cannot reach), so no far-return-into-main gymnastics are needed
+except the two explicit stack fixups documented at the caves.
 
 Justification: the inline justify pre-adjust at 0x97B6 is left as `add` for
 now (JUSTIFY_FLIP below is False). Flipping it is the next tuning knob if
 justified lines look off; it is isolated so it can be toggled without
 touching anything else.
 
+CAVE PLACEMENT: A SEPARATE TSR, NOT ANYTHING APPENDED TO THIS FILE
+--------------------------------------------------------------------
+Two earlier designs both appended the cave to DUNEPRG.EXE's own load
+module and got it overwritten at runtime, live-confirmed via dosbox-mcp
+both times:
+
+1. Appended immediately after the load module's own end, reached via the
+   standard MZ relocation table. This is what caused ENABLE_QUANTITY_
+   REVERSAL's savegame corruption (dune_rtl_quantity_savegame_corruption
+   memory: compress_sav truncating saves whenever the quantity caves were
+   merely *present*, not executing -- "5th caller" never found) and an
+   in-game hang once a quantity-token dialogue line loaded new audio/
+   lip-sync resources.
+2. Appended much further out -- past e_minalloc's boundary (the MZ header
+   field declaring how much *guaranteed* extra memory DOS grants the
+   process beyond the load module) plus a generous fixed safety margin,
+   on the theory that the engine's runtime resource loader (sprites,
+   audio, dialogue text -- a simple bump allocator that does not consult
+   DOS's own allocator or care what DOS currently considers "free") was
+   bounded by e_minalloc the same way it appeared to be on the CD build
+   (DUNE_CD/DNCDPRG.EXE, see patch_rtl_engine_cd.py). Wrong: got
+   overwritten too, within seconds of skipping the intro, at a distance
+   the e_minalloc theory does not explain -- the bump allocator's real
+   ceiling is apparently governed by however much memory this file's own
+   e_maxalloc=0xFFFF ("give me everything you can") actually secures at
+   load time, not by e_minalloc's smaller guaranteed floor. There is no
+   position within DUNEPRG.EXE's own DOS-granted memory block that a
+   bigger margin makes safe -- the bump allocator can eventually reach
+   anywhere in it.
+
+The fix used here sidesteps the whole bug class instead of picking a
+bigger number: the cave lives in a small separate TSR (terminate-and-
+stay-resident program, see rtl_cave_tsr.py), loaded and made resident
+BEFORE DUNEPRG.EXE starts (see build_translation.py's DUNE.BAT handling).
+This is safe for a structural reason, not a margin guess -- DOS's real
+memory allocator (unlike the game's own internal bump allocator) DOES
+respect ownership: once the TSR is resident, the game's own greedy
+e_maxalloc allocation gets "whatever's left," and the game's bump
+allocator, which only ever computes addresses relative to its own segment
+registers, has no way to reach across into a separately-owned process's
+memory.
+
+Mechanically: DUNEPRG.EXE's own entry point (e_cs:e_ip) is redirected to a
+tiny init stub appended right after the load module (same simple, no-
+margin placement as design #1 above -- safe here because the stub is
+transient, running once before the bump allocator has done anything, and
+holds no cave code of its own to be overwritten later). The stub queries
+the TSR over INT 60h, pokes the returned segment into each far-call site's
+segment operand and into the cave's two internal far-jump-back-to-main
+segment fields (which live in the TSR's memory but need the GAME's load
+segment, computed by the stub the same way -- `mov ax,cs; sub ax,
+<this stub's own known raw segment>`), then far-jumps back to the
+untouched original entry point. None of this needs any MZ relocation-table
+entries: the stub's own address comes from e_cs/e_ip (which DOS relocates
+automatically, no table entry required), and every segment value the far-
+call sites and cave need is poked in at runtime by the stub instead of
+fixed up by DOS's loader at load time. See rtl_cave_tsr.py for the TSR
+side of this protocol.
+
+Whoever next adds a cave here (more RTL sites, a different subsystem,
+whatever) does not need to re-derive any of this: add it to CAVES/
+build_blob() as usual (unchanged from before) -- it becomes part of the
+TSR's own payload automatically, with no placement risk to reconsider,
+since the TSR mechanism does not degrade with size the way the appended-
+blob designs did.
+
 Usage:  ./patch_rtl_engine.py [--exe PATH]
-Idempotent; refuses on unrecognised bytes; backs up once to
-<exe>.orig-backup before the first write.
+Also writes <exe's directory>/DUNETSR.COM (the TSR -- see rtl_cave_tsr.py)
+and ensures DUNE.BAT loads it first (see build_translation.py). Idempotent;
+refuses on unrecognised bytes; backs up once to <exe>.orig-backup before
+the first write.
 """
 
 import argparse
@@ -89,16 +148,20 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import rtl_cave_tsr  # noqa: E402  (sibling import, see CLAUDE.md)
+
 UTILS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = UTILS_DIR.parent
 GAME_DIR = REPO_ROOT / "game"
 EXE_NAME = "DUNEPRG.EXE"
+TSR_NAME = "DUNETSR.COM"
 
 MZ_HEADER_SIZE = 512
-RELOC_TABLE_OFFSET = 0x1C
 E_CBLP_OFFSET = 0x02
 E_CP_OFFSET = 0x04
-E_CRLC_OFFSET = 0x06
+E_IP_OFFSET = 0x14
+E_CS_OFFSET = 0x16
 
 JUSTIFY_FLIP = False  # flip the 0x97B6 justify pre-adjust add->sub (tuning)
 
@@ -107,9 +170,13 @@ JUSTIFY_FLIP = False  # flip the 0x97B6 justify pre-adjust add->sub (tuning)
 # that isolated static analysis + an algorithm-level Python simulation
 # (see dune_rtl_engine_patch_moonshot memory) couldn't reproduce or
 # explain, so these let each half be tested independently to narrow down
-# which one is actually at fault before re-enabling both.
+# which one is actually at fault before re-enabling both. Quantity
+# reversal specifically also needed the TSR-based cave placement fix (see
+# the module docstring's "CAVE PLACEMENT" section) before it was safe to
+# enable at all -- the two earlier, appended-cave designs both corrupted
+# saves or hung mid-dialogue once this flag was on.
 ENABLE_NAME_REVERSAL = True
-ENABLE_QUANTITY_REVERSAL = False
+ENABLE_QUANTITY_REVERSAL = True
 
 # ---------------------------------------------------------------------------
 # Cave blob: independent little routines the in-place far calls jump to.
@@ -291,14 +358,26 @@ CLEAR_CAVE = bytes.fromhex(
 #   established is ALSO reached from COMMAND1's own LTR troop-status
 #   menu (via the same COMMAND1-table substitution mechanism), so making
 #   quantity reversal unconditional would break that screen. Quantity
-#   reversal stays flag-gated (and disabled by default, see
-#   ENABLE_QUANTITY_REVERSAL) rather than guessing at a fix for it here.
+#   reversal was originally left flag-gated (and disabled by default)
+#   rather than guessing at a fix for it here.
 #
-#   quantity_exit_cave:                   ; replaces 96DE-96E2 (5B, incl.
-#                                          ; the freed byte at 96E2 -- see
-#                                          ; the jc-redirect patch below)
-#       pop     bp                        ; replayed
-#       <identical body to name_exit_cave from the cmp onward>
+#   That gate turned out to be exactly the same dead check as
+#   entry_mark/name_exit's, for the identical reason: quantity_exit is
+#   reached from the same 0x9609 pre-pass, before SET_CAVE ever raises
+#   [0x42EC] -- confirmed live once the crash/hang bugs above were fixed
+#   and the Fremen-leader quantity dialogue could finally be watched
+#   end-to-end without dying first: no crash, no corruption, but the
+#   digits were still rendered in raw forward order (e.g. "1900" shown as
+#   "0091"), i.e. the `jz` always took the skip branch, exactly as with
+#   name_exit before its own fix. Made unconditional here too, matching
+#   name_exit -- the COMMAND1-LTR-menu regression risk noted above is a
+#   real possibility that hasn't been ruled out, so re-check that screen
+#   (troop-status list) specifically after this change, not just dialogue.
+#
+#   quantity_exit_cave: reached via a jmp-chain, not a far call -- see the
+#   "QUANTITY EXIT: JMP-CHAIN, NOT BYTE CONSUMPTION" note below for why
+#   this no longer replays `pop bp` or consumes the neighbouring byte at
+#   96E2 (both were true in an earlier version of this cave).
 ENTRY_MARK_CAVE = bytes.fromhex("83c50489c626893eee42cb")
 
 QTY_ENTRY_MARK_CAVE = bytes.fromhex("8b460080fb9226893eee42cb")
@@ -309,11 +388,70 @@ NAME_EXIT_CAVE = bytes.fromhex(
 )
 NAME_EXIT_FARJMP_LOCAL_OFF = 0x26  # offset within NAME_EXIT_CAVE of the far-jmp's seg field
 
+# QUANTITY EXIT: JMP-CHAIN, NOT BYTE CONSUMPTION
+# -------------------------------------------------
+# An earlier version of this cave replayed `pop bp` and consumed the
+# neighbouring byte at load offset 0x96E2 (a `ret` shared, unconditionally,
+# by a second, unrelated function -- see the old "unrelated jmp retarget"
+# site this replaced) to fit a direct 5-byte far call into the site's own
+# 4 available bytes at 0x96DE. That consumption is what caused
+# ENABLE_QUANTITY_REVERSAL's savegame corruption: confirmed live
+# (dosbox-mcp) by removing just that one retarget site and nothing else --
+# the corruption disappeared completely. The exact mechanism was not
+# pinned down further (something about redirecting that second function's
+# jump target apparently leaves the stack or a register in a state that
+# corrupts a much later, unrelated operation -- decompress_sav's own
+# in-buffer RLE expansion overran into the stack, confirmed by reading a
+# a long run of a single repeated byte value where return addresses should
+# have been), but the fix does not require finding it: don't consume that
+# byte at all.
+#
+# Same technique already used for the CD build's own equivalent site (see
+# patch_rtl_engine_cd.py) for an unrelated reason (that site was only 4
+# bytes with no spare byte to consume at all): retarget the site's own
+# `jmp near 0x9618` (3 bytes, load offset 0x96DE+1) to a tiny far-jmp
+# trampoline living in unused tail padding (8 zero bytes at load offset
+# 0xECE8, confirmed empty and unreferenced by a whole-file xref scan --
+# see build_stub()/apply_patches()), which jumps into this cave; the cave,
+# after its conditional reversal, far-jumps back to 0x9618 directly. `pop
+# bp` and the `ret` at 0x96E2 are both left completely untouched in the
+# main exe, so the jc-retarget (0x96ED) and the old "unrelated jmp
+# retarget" (0xB3DD) sites are no longer needed at all -- removed.
+#
+# A second bug survived that rewrite: the cave's tail still had `add sp,
+# byte +0x4` right before the final far jmp, left over from when entry was
+# a far CALL (which pushes a 4-byte CS:IP return address that this
+# instruction discarded, since the cave jumps back to 0x9618 manually
+# instead of using retf). The jmp-chain entry above pushes nothing, so
+# that add sp was silently eating 4 bytes of the *caller's* stack frame on
+# every quantity-reversal trigger -- confirmed live (dosbox-mcp) as the
+# cause of a hang (IF cleared, CPU pinned at a fixed CS:IP across repeated
+# breaks) once the earlier corruption bug above was fixed. Removed; no
+# other byte needed changing since it sat exactly at the preceding `jz`'s
+# target offset, so the far jmp that used to follow it simply slides into
+# that same offset once it's gone.
+#
+# A third bug surfaced once the above two were fixed and the Fremen-leader
+# quantity dialogue could finally be watched rendering end-to-end: troop
+# counts came out digit-scrambled (e.g. "1900" as "0190"), not simply
+# unreversed. Root cause turned out to be in the *source data*, not this
+# cave, and didn't need an engine-side fix at all -- see
+# [[dune_quantity_suffix_literal_position]] (translations/PHRASE12.HEB):
+# the English original spells troop-count lines as `\x91<0 men.`, where
+# the literal "0" after the `\x91<` token is a genuine, deliberate part of
+# the phrase (the engine stores/computes the value one digit short and the
+# phrase supplies the missing trailing zero as static text). This cave
+# only ever reverses the digits *between* entry_mark and its own exit, so
+# any literal adjacent to the token in the source stays outside that span
+# either way -- what determines whether it lands on the correct side once
+# the whole line gets RTL-flipped is purely which side of the token it's
+# typed on. Moving it in the .HEB source (before the token instead of
+# after) was the fix; no cave change needed.
 QUANTITY_EXIT_CAVE = bytes.fromhex(
-    "5d26803eec4200741d505357268b1eee424f39fb730d"
-    "268a07268605268807434febef5f5b5883c404ea18960000"
+    "505357268b1eee424f39fb730d"
+    "268a07268605268807434febef5f5b58ea18960000"
 )
-QUANTITY_EXIT_FARJMP_LOCAL_OFF = 0x2C  # offset within QUANTITY_EXIT_CAVE of the far-jmp's seg field
+QUANTITY_EXIT_FARJMP_LOCAL_OFF = len(QUANTITY_EXIT_CAVE) - 2  # offset of the trailing far-jmp's seg field
 
 CAVES = [
     ("pen_advance", PEN_ADVANCE_CAVE),
@@ -331,15 +469,6 @@ if ENABLE_QUANTITY_REVERSAL:
         ("quantity_exit", QUANTITY_EXIT_CAVE),
     ]
 
-# Caves whose own bytes contain a far-jmp-back-to-main needing its OWN
-# relocation entry (segment field, relative to that cave's position once
-# placed in the blob). (cave_name, local_offset_of_seg_field).
-CAVE_INTERNAL_FARJMPS = []
-if ENABLE_NAME_REVERSAL:
-    CAVE_INTERNAL_FARJMPS.append(("name_exit", NAME_EXIT_FARJMP_LOCAL_OFF))
-if ENABLE_QUANTITY_REVERSAL:
-    CAVE_INTERNAL_FARJMPS.append(("quantity_exit", QUANTITY_EXIT_FARJMP_LOCAL_OFF))
-
 
 def build_blob():
     """Concatenate the caves, returning (blob_bytes, {name: offset_in_blob})."""
@@ -353,30 +482,47 @@ def build_blob():
 
 # ---------------------------------------------------------------------------
 # In-place patch sites. Each entry: (name, load_offset, orig_hex, builder)
-# where builder(cave_seg_raw, cave_off) -> new_bytes (same length as orig).
-# reloc_field_off, if not None, is the load offset of the far-call segment
-# field needing a relocation entry.
+# where builder() -> new_bytes (same length as orig). poke_field_rel, if not
+# None, is the byte offset within the site of a far-call segment field that
+# the init stub (see build_stub()) pokes at runtime with the TSR's segment
+# -- these sites carry NO MZ relocation-table entry (see the module
+# docstring's "CAVE PLACEMENT" section for why: the cave now lives in a
+# separately-loaded TSR, not anywhere DOS's loader can fix up for us).
 # ---------------------------------------------------------------------------
 
-def far_call(cave_seg_raw, cave_off):
-    """9A <off16> <seg16> ; the seg half is relocated by the loader."""
-    return bytes([0x9A]) + struct.pack("<H", cave_off) + struct.pack("<H", cave_seg_raw)
+def far_call(cave_off):
+    """9A <off16> <seg16=0 placeholder> ; the init stub pokes the real
+    segment (the TSR's) in at runtime -- see build_stub()."""
+    return bytes([0x9A]) + struct.pack("<H", cave_off) + b"\x00\x00"
+
+
+def far_jmp(cave_off):
+    """EA <off16> <seg16=0 placeholder> ; same runtime-poke convention as
+    far_call(), used by the quantity-exit trampoline (see build_sites())."""
+    return bytes([0xEA]) + struct.pack("<H", cave_off) + b"\x00\x00"
 
 
 class Site:
-    def __init__(self, name, load_offset, orig_hex, new_builder, reloc_field_rel=None):
+    def __init__(self, name, load_offset, orig_hex, new_builder, poke_field_rel=None):
         self.name = name
         self.load_offset = load_offset
         self.file_offset = MZ_HEADER_SIZE + load_offset
         self.orig = bytes.fromhex(orig_hex)
         self.new_builder = new_builder
-        # reloc_field_rel: byte offset within this site of a far-call seg
-        # field that needs a relocation entry (None if none).
-        self.reloc_field_rel = reloc_field_rel
+        # poke_field_rel: byte offset within this site of a far-call seg
+        # field the init stub must poke at runtime (None if none).
+        self.poke_field_rel = poke_field_rel
 
-    def reloc_load_offset(self):
-        return None if self.reloc_field_rel is None else self.load_offset + self.reloc_field_rel
+    def poke_load_offset(self):
+        return None if self.poke_field_rel is None else self.load_offset + self.poke_field_rel
 
+
+# 8 unused zero bytes in the code segment's own tail padding, right before
+# the data segment starts (load offset DS_RAW*16 == 0xECF0) -- confirmed
+# empty and unreferenced by a whole-file jmp/call xref scan. Used as the
+# quantity-exit trampoline's home (see build_sites()); only 5 of the 8
+# bytes are needed.
+QTY_EXIT_TRAMPOLINE_OFFSET = 0xECE8
 
 # Pen-seed reorder in draw_speech_bubble: seed subtitle_pen_x from the box's
 # RIGHT edge instead of the left, and stop writing the (dead) line_start_x/y
@@ -397,31 +543,31 @@ PEN_SEED_NEW = (
 )
 
 
-def build_sites(cave_seg_raw, blob_offsets):
-    pa = blob_offsets["pen_advance"]
-    setc = blob_offsets["set"]
-    clr = blob_offsets["clear"]
-    em = blob_offsets.get("entry_mark")
-    qem = blob_offsets.get("qty_entry_mark")
-    ne = blob_offsets.get("name_exit")
-    qe = blob_offsets.get("quantity_exit")
+def build_sites(tsr_offsets):
+    pa = tsr_offsets["pen_advance"]
+    setc = tsr_offsets["set"]
+    clr = tsr_offsets["clear"]
+    em = tsr_offsets.get("entry_mark")
+    qem = tsr_offsets.get("qty_entry_mark")
+    ne = tsr_offsets.get("name_exit")
+    qe = tsr_offsets.get("quantity_exit")
 
     sites = []
 
-    # Pen-seed reorder (no cave / no reloc).
+    # Pen-seed reorder (no cave / no runtime poke).
     sites.append(Site(
         "pen seed (draw_speech_bubble right edge; frees [0x42EC])",
         PEN_SEED_OFFSET, PEN_SEED_ORIG, lambda: bytes.fromhex(PEN_SEED_NEW),
     ))
 
     # Pen advance, tall + small font bodies: `add [0xfc50],ax; mov cl,al`
-    # (6 bytes) -> far call pen_advance_cave + nop.
+    # (6 bytes) -> far call pen_advance_cave (in the TSR) + nop.
     for label, off in (("tall", 0xCB18), ("small", 0xCBB2)):
         sites.append(Site(
             f"pen advance ({label}) -> far call RTL cave",
             off, "010650FC" "8AC8",
-            (lambda o=pa: far_call(cave_seg_raw, o) + b"\x90"),
-            reloc_field_rel=3,
+            (lambda o=pa: far_call(o) + b"\x90"),
+            poke_field_rel=3,
         ))
 
     # SET hook 0x9711: `mov dx,[0x42e8]; mov bx,[0x42ea]` (8 bytes)
@@ -429,8 +575,8 @@ def build_sites(cave_seg_raw, blob_offsets):
     sites.append(Site(
         "RTL flag set hook (draw_subtitle_body pre-draw)",
         0x9711, "8B16E842" "8B1EEA42",
-        (lambda o=setc: far_call(cave_seg_raw, o) + b"\x90\x90\x90"),
-        reloc_field_rel=3,
+        (lambda o=setc: far_call(o) + b"\x90\x90\x90"),
+        poke_field_rel=3,
     ))
 
     # CLEAR hook 0x986B: `mov [0x42e8],dx; mov [0x42ea],bx; dec si` (9 bytes,
@@ -441,8 +587,8 @@ def build_sites(cave_seg_raw, blob_offsets):
     sites.append(Site(
         "RTL flag clear hook (draw_subtitle_body tail; keeps 0x9874 ret)",
         0x986B, "8916E842" "891EEA42" "4E",
-        (lambda o=clr: far_call(cave_seg_raw, o) + b"\x90\x90\x90\x90"),
-        reloc_field_rel=3,
+        (lambda o=clr: far_call(o) + b"\x90\x90\x90\x90"),
+        poke_field_rel=3,
     ))
 
     # SPACE advance, flipped in place (keeps the load-bearing push/pop dx
@@ -475,8 +621,8 @@ def build_sites(cave_seg_raw, blob_offsets):
         sites.append(Site(
             "name-token entry mark (records output-span start)",
             0x964D, "83C504" "8BF0",
-            (lambda o=em: far_call(cave_seg_raw, o)),
-            reloc_field_rel=3,
+            (lambda o=em: far_call(o)),
+            poke_field_rel=3,
         ))
 
         # Name/m@@ token exit, 0x967C: `mov ds,[bp+2]; jmp short 0x9618`
@@ -485,8 +631,8 @@ def build_sites(cave_seg_raw, blob_offsets):
         sites.append(Site(
             "name-token exit (conditional reversal)",
             0x967C, "8E5E02" "EB97",
-            (lambda o=ne: far_call(cave_seg_raw, o)),
-            reloc_field_rel=3,
+            (lambda o=ne: far_call(o)),
+            poke_field_rel=3,
         ))
 
     if ENABLE_QUANTITY_REVERSAL:
@@ -497,63 +643,36 @@ def build_sites(cave_seg_raw, blob_offsets):
         sites.append(Site(
             "quantity-token entry mark (records output-span start)",
             0x969C, "8B860000" "80FB92",
-            (lambda o=qem: far_call(cave_seg_raw, o) + b"\x90\x90"),
-            reloc_field_rel=3,
+            (lambda o=qem: far_call(o) + b"\x90\x90"),
+            poke_field_rel=3,
         ))
 
-        # draw_subtitle_body's own early-exit `jc 0x96e2` (at 0x96ED) is
-        # redirected to the functionally-identical bare `ret` at 0x9693
-        # (the normal exit of the SAME function, after its "add sp,0x32"
-        # -- 0x9693 is just the `ret` byte itself, landing there skips the
-        # add exactly like landing at 0x96e2 always did). Same-length
-        # operand swap, the lowest-risk patch category used throughout
-        # this file.
+        # Quantity token exit, 0x96DE: `pop bp; jmp near 0x9618` (4B). See
+        # the "QUANTITY EXIT: JMP-CHAIN, NOT BYTE CONSUMPTION" note at
+        # QUANTITY_EXIT_CAVE for why this no longer consumes the
+        # neighbouring byte at 0x96E2 (a change that fixed the
+        # ENABLE_QUANTITY_REVERSAL savegame corruption, confirmed live) --
+        # `pop bp` is left completely untouched, and only the `jmp near`
+        # operand is retargeted (same 3-byte length) to a tiny far-jmp
+        # trampoline in unused tail padding, which jumps into
+        # quantity_exit_cave.
         sites.append(Site(
-            "draw_subtitle_body early-exit jc retarget (1 of 2 refs to 0x96E2)",
-            0x96ED, "72F3", lambda: bytes.fromhex("72A4"),
+            "quantity-token exit (jmp retargeted to tail-padding trampoline)",
+            0x96DE, "5D" "E936FF",
+            (lambda: b"\x5D\xE9" + struct.pack(
+                "<H", (QTY_EXIT_TRAMPOLINE_OFFSET - (0x96DE + 1 + 3)) & 0xFFFF)),
         ))
 
-        # A SECOND, unrelated function also jumps to 0x96E2 -- an
-        # unconditional near jmp at 0xB3DD, found live: enabling only the
-        # jc-retarget above (assuming it was the only reference, per the
-        # original design comment here) reproduced a genuine reproducible
-        # in-game hang the very first time an actual quantity-token
-        # dialogue line was reached, confirmed NOT present in the
-        # same-dialogue baseline with both reversal flags off. Scanned the
-        # whole original EXE programmatically for every jmp/call whose
-        # target resolves to 0x96E2 (short/near/far forms) rather than
-        # trusting the single reference already known about -- found
-        # exactly this one additional hit. Whatever this other function is
-        # (not identified further -- not needed to fix this), it
-        # unconditionally reuses draw_subtitle_body's tail `ret` at 0x96E2
-        # as its own shared exit (a common size-optimisation in this
-        # codebase's era), so it always lands there, not just
-        # conditionally like the jc site. Once quantity_exit_cave's far
-        # call consumes 0x96E2 as its 5th byte, this jmp lands mid-far-call
-        # and executes garbage -- a delayed corrupt-now-hang-later failure
-        # exactly like the crash this session already root-caused and
-        # fixed once (relocation truncation) and again (DS-vs-ES scratch
-        # access) elsewhere in this same investigation. Same fix: redirect
-        # to the same clean 0x9693 target the jc site uses. Same-length
-        # rel16 operand swap (E9 <rel16>, 3B), computed programmatically
-        # from the live file, not by hand.
+        # Trampoline: 5 of the 8 unused zero bytes in the code segment's
+        # tail padding, right before the data segment starts (confirmed
+        # empty and unreferenced by a whole-file xref scan) become a far
+        # jmp into quantity_exit_cave (segment runtime-poked, same
+        # convention as every other TSR-pointing far call/jmp here).
         sites.append(Site(
-            "unrelated jmp retarget (2 of 2 refs to 0x96E2)",
-            0xB3DD, "E902E3", lambda: bytes.fromhex("E9B3E2"),
-        ))
-
-        # Quantity token exit, 0x96DE: `pop bp; jmp 0x9618` (4B) + the
-        # now-freed `ret` at 0x96E2 (1B) = 5B -> far call
-        # quantity_exit_cave (replays the bp pop, conditionally reverses
-        # the output span, far-jmps back to 0x9618). MUST be applied
-        # together with the jc-retarget site above (both refuse/no-op
-        # idempotently as a pair, same as every other multi-site group in
-        # this file).
-        sites.append(Site(
-            "quantity-token exit (conditional reversal; consumes freed 0x96E2)",
-            0x96DE, "5D" "E936FF" "C3",
-            (lambda o=qe: far_call(cave_seg_raw, o)),
-            reloc_field_rel=3,
+            "quantity-exit trampoline (tail padding -> far jmp into cave)",
+            QTY_EXIT_TRAMPOLINE_OFFSET, "0000000000",
+            (lambda o=qe: far_jmp(o)),
+            poke_field_rel=3,
         ))
 
     # Optional: justify pre-adjust 0x97B6 add->sub.
@@ -570,37 +689,84 @@ def build_sites(cave_seg_raw, blob_offsets):
 # Apply / detect
 # ---------------------------------------------------------------------------
 
-def compute_blob_layout(load_module_len):
+# ---------------------------------------------------------------------------
+# Init stub: appended right after the load module (small, transient -- see
+# the module docstring's "CAVE PLACEMENT" section for why this placement is
+# safe for the stub even though it wasn't safe for the cave itself). Hand-
+# assembled with nasm from readable source, then round-tripped through
+# ndisasm to confirm it decodes back to the intended instructions -- same
+# process used for every cave/cave-adjacent blob in this file.
+#
+#   HEAD:
+#       mov ax, 0x4455        ; "are you the Dune RTL cave TSR?"
+#       int 0x60
+#       mov ax, cs
+#       sub ax, <CAVE_SEG_RAW>            ; placeholder @8 (2B) -> ax = load_segment
+#       push es
+#       mov es, ax                         ; es = load segment, ready for site pokes
+#   (site pokes go here: one `mov word [es:<site_load_offset>], bx` per
+#    far-call site, 5 bytes each incl. the 0x26 ES-override prefix)
+#   MID:
+#       mov es, bx                         ; es = TSR (cave) segment
+#   (farjmp pokes go here: one `mov word [es:<local_off>], ax` per cave-
+#    internal far-jump-back-to-main site, 4 bytes each -- AX-only short form)
+#   TAIL:
+#       pop es
+#       push ax
+#       push word 0
+#       retf                                ; -> untouched original entry point
+_STUB_HEAD = bytes.fromhex("b85544cd608cc82d111106 8ec0".replace(" ", ""))
+_STUB_HEAD_CAVE_SEG_RAW_OFF = 8
+_STUB_MID = bytes.fromhex("8ec3")
+_STUB_TAIL = bytes.fromhex("07506a00cb")
+
+
+def _site_poke(load_offset, reg_is_bx=True):
+    """ES:[load_offset] <- bx (5B, `mov [es:off],bx`) or <- ax (4B, the
+    AX-only short encoding, `mov [es:off],ax`)."""
+    if reg_is_bx:
+        return bytes([0x26, 0x89, 0x1E]) + struct.pack("<H", load_offset & 0xFFFF)
+    return bytes([0x26, 0xA3]) + struct.pack("<H", load_offset & 0xFFFF)
+
+
+def build_stub(cave_seg_raw, site_load_offsets, farjmp_local_offsets):
+    head = bytearray(_STUB_HEAD)
+    struct.pack_into("<H", head, _STUB_HEAD_CAVE_SEG_RAW_OFF, cave_seg_raw)
+    stub = bytes(head)
+    for off in site_load_offsets:
+        stub += _site_poke(off, reg_is_bx=True)
+    stub += _STUB_MID
+    for off in farjmp_local_offsets:
+        stub += _site_poke(off, reg_is_bx=False)
+    stub += _STUB_TAIL
+    return stub
+
+
+def compute_stub_layout(load_module_len):
+    """Place the (small, transient) init stub at the first 16-byte-aligned
+    offset past the load module's own end -- see the module docstring for
+    why this simple placement, unsafe for the cave itself, is fine for the
+    stub."""
     pad_len = (-load_module_len) % 16
-    blob_load_offset = load_module_len + pad_len
-    assert blob_load_offset % 16 == 0
-    return pad_len, blob_load_offset, blob_load_offset // 16
+    stub_load_offset = load_module_len + pad_len
+    assert stub_load_offset % 16 == 0
+    return pad_len, stub_load_offset, stub_load_offset // 16
 
 
 def detect_patched(data):
-    """Return True if the pen-advance sites AND the (newer) name-token
-    entry-mark site already hold far calls to blobs with matching bytes.
-    (Read back from disk, not recomputed from length.) Checking a site from
-    each generation of this script avoids a false "already patched" on a
-    file only an OLDER version of this script touched (e.g. one without
-    the token-substitution reversal caves), which would otherwise cause
-    apply_patches to skip installing the sites this version adds."""
-    checks = [(0xCB18, PEN_ADVANCE_CAVE), (0xCBB2, PEN_ADVANCE_CAVE)]
-    if ENABLE_NAME_REVERSAL:
-        checks.append((0x964D, ENTRY_MARK_CAVE))
-    if ENABLE_QUANTITY_REVERSAL:
-        checks.append((0x969C, QTY_ENTRY_MARK_CAVE))
-    for off, expected in checks:
-        fo = MZ_HEADER_SIZE + off
-        cur = bytes(data[fo:fo + 5])
-        if cur[0] != 0x9A:
-            return False
-        cave_off = struct.unpack_from("<H", cur, 1)[0]
-        cave_seg_raw = struct.unpack_from("<H", cur, 3)[0]
-        cave_file = MZ_HEADER_SIZE + cave_seg_raw * 16 + cave_off
-        if bytes(data[cave_file:cave_file + len(expected)]) != expected:
-            return False
-    return True
+    """Return True if e_cs:e_ip already points at a stub whose fixed
+    (non-placeholder) bytes match _STUB_HEAD -- i.e. this script's own
+    entry-point redirect is already installed."""
+    e_ip, e_cs = struct.unpack_from("<HH", data, E_IP_OFFSET)
+    if e_cs == 0 and e_ip == 0:
+        return False
+    stub_file_off = MZ_HEADER_SIZE + e_cs * 16 + e_ip
+    candidate = bytes(data[stub_file_off:stub_file_off + len(_STUB_HEAD)])
+    if len(candidate) != len(_STUB_HEAD):
+        return False
+    off = _STUB_HEAD_CAVE_SEG_RAW_OFF
+    return (candidate[:off] == _STUB_HEAD[:off]
+            and candidate[off + 2:] == _STUB_HEAD[off + 2:])
 
 
 def apply_patches(exe_path):
@@ -608,17 +774,23 @@ def apply_patches(exe_path):
         data = bytearray(f.read())
 
     if detect_patched(data):
-        print(f"[patch] {exe_path.name}: already patched (RTL native-dialogue engine)")
+        print(f"[patch] {exe_path.name}: already patched (RTL native-dialogue engine, TSR-based cave)")
         return False
 
+    # 1. Build the TSR (holds the cave -- see rtl_cave_tsr.py) and write it
+    # alongside the EXE. tsr_offsets gives each cave routine's absolute
+    # .COM-offset within it -- what the far-call sites' off16 operand needs.
     blob, blob_offsets = build_blob()
-    load_module_len = len(data) - MZ_HEADER_SIZE
-    pad_len, blob_load_offset, cave_seg_raw = compute_blob_layout(load_module_len)
-    blob_file_offset = MZ_HEADER_SIZE + blob_load_offset
+    tsr_com, tsr_offsets = rtl_cave_tsr.build_tsr_com(blob, blob_offsets)
+    tsr_path = exe_path.parent / TSR_NAME
+    tsr_path.write_bytes(tsr_com)
+    print(f"[patch] wrote {tsr_path.name} ({len(tsr_com)}B); cave offsets within it: "
+          + ", ".join(f"{n}=0x{o:x}" for n, o in tsr_offsets.items()))
 
-    sites = build_sites(cave_seg_raw, blob_offsets)
+    sites = build_sites(tsr_offsets)
 
-    # Verify every site is at its known-original bytes.
+    # Verify every site is at its known-original bytes BEFORE writing
+    # anything (same refuse-on-mismatch posture as every other patch here).
     for s in sites:
         cur = bytes(data[s.file_offset:s.file_offset + len(s.orig)])
         if cur != s.orig:
@@ -639,67 +811,55 @@ def apply_patches(exe_path):
         shutil.copy2(exe_path, backup_path)
         print(f"[patch] backed up {exe_path.name} -> {backup_path.name}")
 
-    # 1. Append pad + cave blob.
-    data.extend(b"\x90" * pad_len)
-    assert len(data) == blob_file_offset
-    data.extend(blob)
-    print(f"[patch] appended {pad_len}B pad + {len(blob)}B cave blob at load offset "
-          f"0x{blob_load_offset:x} (segment raw 0x{cave_seg_raw:x}); caves at "
-          + ", ".join(f"{n}=+0x{o:x}" for n, o in blob_offsets.items()))
-
-    # 2. In-place patches; collect relocation field offsets. Starts with
-    # the blob-internal far-jmp-back-to-main sites (name_exit_cave and
-    # quantity_exit_cave each jump to 0x0:0x9618 with the segment half
-    # needing the same load-time fixup as every other far-call/jmp here).
-    reloc_offsets = []
-    for cave_name, local_off in CAVE_INTERNAL_FARJMPS:
-        seg_field_load_offset = blob_load_offset + blob_offsets[cave_name] + local_off
-        reloc_offsets.append(seg_field_load_offset)
-        print(f"[patch] {cave_name} internal far-jmp seg field @ load offset 0x{seg_field_load_offset:x}")
+    # 2. In-place site patches (far-call sites now carry a 0x0000 segment
+    # placeholder the init stub overwrites at runtime; non-far-call sites
+    # -- pen seed, space add/store, jc/jmp retargets -- are plain same-
+    # length in-place edits, unchanged from every earlier version).
     for s in sites:
         new = s.new_builder()
         data[s.file_offset:s.file_offset + len(new)] = new
-        r = s.reloc_load_offset()
-        if r is not None:
-            reloc_offsets.append(r)
-        print(f"[patch] {s.name} @ 0x{s.file_offset:x}")
+        print(f"[patch] {s.name} @ 0x{s.file_offset:x}"
+              + (" (runtime-poked segment)" if s.poke_load_offset() is not None else ""))
 
-    # 3. MZ header: e_cblp (bytes used in the last 512-byte page).
+    # 3. Build + append the init stub right after the (now in-place-
+    # patched) load module.
+    load_module_len = len(data) - MZ_HEADER_SIZE
+    pad_len, stub_load_offset, cave_seg_raw = compute_stub_layout(load_module_len)
+    site_load_offsets = [s.poke_load_offset() for s in sites if s.poke_load_offset() is not None]
+    farjmp_local_offsets = []
+    if ENABLE_NAME_REVERSAL:
+        farjmp_local_offsets.append(tsr_offsets["name_exit"] + NAME_EXIT_FARJMP_LOCAL_OFF)
+    if ENABLE_QUANTITY_REVERSAL:
+        farjmp_local_offsets.append(tsr_offsets["quantity_exit"] + QUANTITY_EXIT_FARJMP_LOCAL_OFF)
+    stub = build_stub(cave_seg_raw, site_load_offsets, farjmp_local_offsets)
+
+    data.extend(b"\x00" * pad_len)
+    assert len(data) == MZ_HEADER_SIZE + stub_load_offset
+    data.extend(stub)
+    print(f"[patch] appended {pad_len}B pad + {len(stub)}B init stub at load offset "
+          f"0x{stub_load_offset:x} (segment raw 0x{cave_seg_raw:x}); "
+          f"{len(site_load_offsets)} site pokes, {len(farjmp_local_offsets)} internal-farjmp pokes -- "
+          "all runtime, no MZ relocation entries needed")
+
+    # 4. MZ header: e_cp/e_cblp (the stub is small, but be generally
+    # correct rather than assume it never crosses a page boundary).
     new_len = len(data)
-    e_cp = struct.unpack_from("<H", data, E_CP_OFFSET)[0]
     old_cblp = struct.unpack_from("<H", data, E_CBLP_OFFSET)[0]
-    last_page = new_len - (e_cp - 1) * 512
-    if not (0 < last_page <= 512):
-        sys.exit(f"{exe_path}: cave growth crossed a 512-byte page boundary "
-                 f"(last_page={last_page}); e_cp bump not implemented.")
-    struct.pack_into("<H", data, E_CBLP_OFFSET, last_page % 512)
-    print(f"[patch] e_cblp {old_cblp} -> {last_page % 512} (file {new_len} bytes)")
+    old_cp = struct.unpack_from("<H", data, E_CP_OFFSET)[0]
+    new_cp = (new_len + 511) // 512
+    new_cblp = new_len - (new_cp - 1) * 512
+    assert 0 < new_cblp <= 512
+    assert new_cp * 512 - (512 - new_cblp) == new_len
+    struct.pack_into("<H", data, E_CP_OFFSET, new_cp)
+    struct.pack_into("<H", data, E_CBLP_OFFSET, new_cblp)
+    print(f"[patch] e_cp {old_cp} -> {new_cp}, e_cblp {old_cblp} -> {new_cblp} (file {new_len} bytes)")
 
-    # 4. Relocation table: one new entry per far-call segment field.
-    e_crlc = struct.unpack_from("<H", data, E_CRLC_OFFSET)[0]
-    write_at = RELOC_TABLE_OFFSET + e_crlc * 4
-    if write_at + len(reloc_offsets) * 4 > MZ_HEADER_SIZE:
-        sys.exit(f"{exe_path}: not enough header room for {len(reloc_offsets)} relocations.")
-    for r in reloc_offsets:
-        # (offset, segment) such that segment*16+offset == r (the fixup
-        # site's own load offset). For r < 0x10000 this is (r, 0), same as
-        # before. r CAN exceed 0x10000 for a relocation whose fixup site
-        # lives inside the appended cave blob (e.g. name_exit_cave's own
-        # internal far-jmp, past the 64KB mark for this file's size) --
-        # `offset=r & 0xFFFF, segment=0` silently truncated r in that case,
-        # pointing the fixup at the wrong (and unrelated) address while
-        # leaving the real far-jmp's segment field un-relocated at 0x0000
-        # -- i.e. a jmp far 0x0000:xxxx to the interrupt vector table,
-        # which is exactly the invalid-opcode/BIOS-int-6 hang this bug
-        # caused. Splitting off the >16-bit part into the segment half
-        # (paragraph-granular, so segment<<4 recombines exactly) fixes
-        # both the wrong-address write and the mis-relocated far-jmp.
-        hi, lo = divmod(r, 0x10000)
-        struct.pack_into("<HH", data, write_at, lo, hi << 12)
-        print(f"[patch] +reloc for far-call seg field at load offset 0x{r:x}")
-        write_at += 4
-    struct.pack_into("<H", data, E_CRLC_OFFSET, e_crlc + len(reloc_offsets))
-    print(f"[patch] e_crlc {e_crlc} -> {e_crlc + len(reloc_offsets)}")
+    # 5. MZ header: e_cs/e_ip -> redirect entry point to the init stub.
+    # Original entry (0000:0000, i.e. load_segment:0000) is left completely
+    # untouched in the file; the stub far-jumps back to it once it's done.
+    old_ip, old_cs = struct.unpack_from("<HH", data, E_IP_OFFSET)
+    struct.pack_into("<HH", data, E_IP_OFFSET, 0, cave_seg_raw)
+    print(f"[patch] entry point e_cs:e_ip {old_cs:04x}:{old_ip:04x} -> {cave_seg_raw:04x}:0000 (init stub)")
 
     with open(exe_path, "wb") as f:
         f.write(data)
