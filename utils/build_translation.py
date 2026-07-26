@@ -25,10 +25,11 @@ this repo). The pipeline then:
      natively right-to-left (idempotent, see patch_rtl_engine.py --
      EXPERIMENTAL; wired in here specifically so a from-scratch game/
      restore can't silently drop it, as happened once during development)
-  8. makes sure game/DUNE.BAT launches step 7's RTL cave TSR
-     (game/DUNETSR.COM) before duneprg runs -- required for step 7's
-     patches to have safe memory (idempotent; game/ is gitignored so this
-     can't be shipped as a committed file, must be re-applied every build)
+  8. makes sure game/DUNE.BAT (and game/COMM.BAT, if the installer
+     produced it) launches step 7's RTL cave TSR (game/DUNETSR.COM)
+     before duneprg runs -- required for step 7's patches to have safe
+     memory (idempotent; game/ is gitignored so this can't be shipped as
+     a committed file, must be re-applied every build)
 """
 
 import argparse
@@ -319,27 +320,39 @@ def install_to_game(built_files):
         print(f"[install] {path.relative_to(REPO_ROOT)} -> {dest.relative_to(REPO_ROOT)}")
 
 
-def ensure_dune_bat_launches_tsr():
+GAME_LAUNCHER_BATS = ["DUNE.BAT", "COMM.BAT"]
+
+
+def ensure_launcher_bats_launch_tsr():
     """patch_rtl_engine's caves live in a separate TSR (see
     dune_rtl_tsr_cave_technique project memory: appending them to
     DUNEPRG.EXE's own memory gets them silently overwritten by the game's
     own runtime resource loader) that must go resident *before* duneprg
-    runs. game/ is gitignored -- a fresh game/ install's DUNE.BAT has no
-    way to already contain this, so unlike the EXE patches above (which
-    persist in the binary itself), this needs re-applying to the batch
-    file every time, idempotently, same spirit as
-    patch_rtl_engine.detect_patched()."""
-    bat_path = GAME_DIR / "DUNE.BAT"
+    runs. game/ is gitignored -- a fresh game/ install's batch files have
+    no way to already contain this, so unlike the EXE patches above (which
+    persist in the binary itself), this needs re-applying every time,
+    idempotently, same spirit as patch_rtl_engine.detect_patched().
+
+    The installer produces DUNE.BAT (the one the manual tells you to run)
+    and, at least for some sound-driver configs, also COMM.BAT -- a second
+    launcher that runs `duneprg` directly with its own driver flags. Either
+    one bypasses the TSR if left unpatched, so both get the same treatment;
+    COMM.BAT is skipped if a given game/ install doesn't have it."""
     tsr_stem = Path(patch_rtl_engine.TSR_NAME).stem.encode()  # b"DUNETSR"
-    data = bat_path.read_bytes()
-    lines = data.split(b"\r\n")
-    if any(line.strip().upper() == tsr_stem for line in lines):
-        print(f"[dune.bat] already launches {tsr_stem.decode()}, skipping")
-        return
-    insert_at = 1 if lines and lines[0].strip().upper() == b"@ECHO OFF" else 0
-    lines.insert(insert_at, tsr_stem)
-    bat_path.write_bytes(b"\r\n".join(lines))
-    print(f"[dune.bat] inserted '{tsr_stem.decode()}' launch line")
+    for bat_name in GAME_LAUNCHER_BATS:
+        bat_path = GAME_DIR / bat_name
+        if not bat_path.exists():
+            print(f"[{bat_name.lower()}] not present in game/, skipping")
+            continue
+        data = bat_path.read_bytes()
+        lines = data.split(b"\r\n")
+        if any(line.strip().upper() == tsr_stem for line in lines):
+            print(f"[{bat_name.lower()}] already launches {tsr_stem.decode()}, skipping")
+            continue
+        insert_at = 1 if lines and lines[0].strip().upper() == b"@ECHO OFF" else 0
+        lines.insert(insert_at, tsr_stem)
+        bat_path.write_bytes(b"\r\n".join(lines))
+        print(f"[{bat_name.lower()}] inserted '{tsr_stem.decode()}' launch line")
 
 
 def main():
@@ -370,8 +383,8 @@ def main():
     print("[7/8] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
     patch_rtl_engine.apply_patches(GAME_DIR / patch_rtl_engine.EXE_NAME)
 
-    print("[8/8] ensuring game/DUNE.BAT launches the RTL cave TSR")
-    ensure_dune_bat_launches_tsr()
+    print("[8/8] ensuring game launcher .BAT files launch the RTL cave TSR")
+    ensure_launcher_bats_launch_tsr()
 
     print("Done.")
 

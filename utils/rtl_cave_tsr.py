@@ -29,7 +29,8 @@ own greedy e_maxalloc=0xFFFF allocation gets "whatever's left", and the
 game's bump allocator, which only ever computes addresses relative to its
 own segment registers, has no way to reach across into the TSR's
 independently-owned block. This requires the TSR to load and go resident
-BEFORE DUNEPRG.EXE starts (see build_translation.py's DUNE.BAT handling).
+BEFORE DUNEPRG.EXE starts (see build_translation.py's launcher-.BAT
+handling -- DUNE.BAT and, if present, COMM.BAT).
 
 PROTOCOL
 --------
@@ -70,9 +71,24 @@ import struct
 # decodes back to the intended instructions before being frozen as hex
 # here -- same process used for every cave in patch_rtl_engine.py.
 #
+# Frees its own inherited environment block before going resident (DOS
+# doesn't do this automatically for a TSR the way it does for a normally-
+# exiting program) -- found necessary live: a book-page-flip crash under
+# COMM.BAT's SDB2207 sound-driver config traced back to DUNEPRG.EXE's own
+# stock "Not enough standard memory to run Dune" bailout path corrupting
+# the MCB chain when memory got razor-thin, and this TSR leaving a ~1.1KB
+# environment block resident (visible in a `mem` MCB dump as a stray
+# 'COMMAND'-named block owned by DUNETSR's own PSP) was eating into that
+# already-thin margin for no reason -- the TSR never needs its inherited
+# environment after install.
+#
 #   BITS 16
 #   ORG 0x100
 #   start:
+#       mov bx, [0x2C]          ; word at PSP:0x2C = our environment segment
+#       mov es, bx
+#       mov ah, 0x49            ; free memory block (ES = block to free)
+#       int 0x21
 #       mov ax, 0x3560          ; AH=35h (get vector), AL=60h
 #       int 0x21                ; -> ES:BX = current INT 60h handler
 #       mov [old_60_off], bx
@@ -100,10 +116,11 @@ import struct
 #       db 0x90, 0x90, 0x90, 0x90   ; placeholder, replaced below
 #   resident_end:
 _TEMPLATE = bytes.fromhex(
-    "b86035cd21891e34018c063601"
-    "ba2401b86025cd21"
-    "ba3c0183c20fb104d3eab80031cd21"
-    "3d554474052eff2e3401"
+    "8b1e2c008ec3b449cd21"
+    "b86035cd21891e3e018c064001"
+    "ba2e01b86025cd21"
+    "ba460183c20fb104d3eab80031cd21"
+    "3d554474052eff2e3e01"
     "8ccbb85644cf"
     "0000"
     "0000"
@@ -111,7 +128,7 @@ _TEMPLATE = bytes.fromhex(
 )
 _CAVE_PLACEHOLDER = b"\x90\x90\x90\x90"
 _RESIDENT_END_MOV_OPCODE = 0xBA  # `mov dx, imm16` -- the resident_end reference
-_RESIDENT_END_PLACEHOLDER = 0x013C  # resident_end's offset in the unmodified template
+_RESIDENT_END_PLACEHOLDER = 0x0146  # resident_end's offset in the unmodified template
 
 _COM_ORG = 0x100
 

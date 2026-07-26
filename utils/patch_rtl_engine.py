@@ -102,7 +102,8 @@ both times:
 The fix used here sidesteps the whole bug class instead of picking a
 bigger number: the cave lives in a small separate TSR (terminate-and-
 stay-resident program, see rtl_cave_tsr.py), loaded and made resident
-BEFORE DUNEPRG.EXE starts (see build_translation.py's DUNE.BAT handling).
+BEFORE DUNEPRG.EXE starts (see build_translation.py's launcher-.BAT
+handling -- DUNE.BAT and, if present, COMM.BAT).
 This is safe for a structural reason, not a margin guess -- DOS's real
 memory allocator (unlike the game's own internal bump allocator) DOES
 respect ownership: once the TSR is resident, the game's own greedy
@@ -137,9 +138,9 @@ blob designs did.
 
 Usage:  ./patch_rtl_engine.py [--exe PATH]
 Also writes <exe's directory>/DUNETSR.COM (the TSR -- see rtl_cave_tsr.py)
-and ensures DUNE.BAT loads it first (see build_translation.py). Idempotent;
-refuses on unrecognised bytes; backs up once to <exe>.orig-backup before
-the first write.
+and ensures DUNE.BAT (and COMM.BAT, if present) loads it first (see
+build_translation.py). Idempotent; refuses on unrecognised bytes; backs up
+once to <exe>.orig-backup before the first write.
 """
 
 import argparse
