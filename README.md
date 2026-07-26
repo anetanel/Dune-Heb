@@ -171,6 +171,7 @@ All scripts live in `utils/`.
 - **`utils/hsq.py`** / **`utils/tu.py`** — pure-Python HSQ compression/decompression and phrase-binary pack/unpack, ported from the upstream `hsq.c`/`tu.c` (kept in `utils/` for reference, along with the `Makefile`, but no longer built or used — no C compiler required).
 - **`utils/bigs_sprite.py`** — decode/encode for the picture-resource sprite container format (see "The intro title card" above).
 - **`utils/patch_intro_title.py`** — regenerates the intro's "DUNE" -> "חולית" title sprite; see "The intro title card" above.
+- **`utils/extract_sprites.py`** — dumps every sprite from every `game/*.HSQ` file that uses the picture-resource format as individually named PNGs (`tmp/sprites/<NAME>/<index>_<w>x<h>.png`), for browsing the game's art assets. Skips files in other formats (text tables, font table, sound/music data, a few unidentified containers) and lists them in `tmp/sprites/EXTRACTION_REPORT.txt` along with why. Read-only — never touches `org_files/`, `translations/`, or `game/`.
 - **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
 
 ## Testing in-game
