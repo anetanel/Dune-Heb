@@ -31,3 +31,9 @@ __pycache__/
 # unmodified game files
 /org_files/
 /game_copy
+
+# CD-build assets (copied in for the patch_rtl_engine_cd.py exploration;
+# same "never contains the original game's assets" rule as /game/ above)
+/DUNECD/
+/DUNE_CD/
+/Dune.iso
