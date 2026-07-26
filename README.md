@@ -40,7 +40,8 @@ licensed under the GPLv2 (see `fonts/AharoniCLM-LICENSE`).
 | `translations/` | Hebrew `.HEB` source files (pasted from the translation spreadsheet) | yes |
 | `font_png/` | Hebrew glyph images loaded into the game's font table | yes |
 | `fonts/` | Third-party font files used to render non-DUNECHAR graphics (currently just the intro title card) | yes |
-| `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py`, `bigs_sprite.py`, `patch_intro_title.py` | yes |
+| `assets/` | Other source images spliced into game graphics (currently just the intro credits' logo badge) | yes |
+| `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py`, `bigs_sprite.py`, `patch_intro_title.py`, `patch_intro_logo.py` | yes |
 | `org_files/` | Unmodified original `.HSQ` files, verified by checksum | **no** (gitignored) |
 | `game/` | Your copy of the full game install; also the final install target | **no** (gitignored) |
 | `build/` | Final translated `.HSQ` outputs, ready to install | yes |
@@ -154,9 +155,13 @@ files and the `LOGO.HNM` video — see `utils/bigs_sprite.py`'s docstring for
 the full format writeup). `utils/patch_intro_title.py` regenerates just the
 "DUNE" sprite as "חולית" (rendered from `fonts/AharoniCLM-Book.ttf`, chosen to
 echo the bold block lettering on the actual Israeli retail release's box
-art) and splices it back in, producing `build/INTDS.HSQ`. `build_translation.py`
-runs this on every build; run `./utils/patch_intro_title.py` directly to
-regenerate just this file.
+art) and splices it back in, producing `build/INTDS.HSQ`. `utils/patch_intro_logo.py`
+then chains off that same file, adding this translation's own
+`assets/hebrew_adv_pixel.png` logo badge below the "Interactive Entertainment
+Systems" credit line (sprite 10), growing that sprite's own bitmap downward
+in place rather than touching its screen position. `build_translation.py`
+runs both on every build; run `./utils/patch_intro_title.py` then
+`./utils/patch_intro_logo.py` directly to regenerate just this file.
 
 ## Scripts
 
@@ -171,6 +176,7 @@ All scripts live in `utils/`.
 - **`utils/hsq.py`** / **`utils/tu.py`** — pure-Python HSQ compression/decompression and phrase-binary pack/unpack, ported from the upstream `hsq.c`/`tu.c` (kept in `utils/` for reference, along with the `Makefile`, but no longer built or used — no C compiler required).
 - **`utils/bigs_sprite.py`** — decode/encode for the picture-resource sprite container format (see "The intro title card" above).
 - **`utils/patch_intro_title.py`** — regenerates the intro's "DUNE" -> "חולית" title sprite; see "The intro title card" above.
+- **`utils/patch_intro_logo.py`** — adds the `assets/hebrew_adv_pixel.png` logo badge below the "Interactive Entertainment Systems" credit line; see "The intro title card" above.
 - **`utils/extract_sprites.py`** — dumps every sprite from every `game/*.HSQ` file that uses the picture-resource format as individually named PNGs (`tmp/sprites/<NAME>/<index>_<w>x<h>.png`), for browsing the game's art assets. Skips files in other formats (text tables, font table, sound/music data, a few unidentified containers) and lists them in `tmp/sprites/EXTRACTION_REPORT.txt` along with why. Read-only — never touches `org_files/`, `translations/`, or `game/`.
 - **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
 

@@ -17,7 +17,9 @@ this repo). The pipeline then:
      not already present in tmp/ (regenerated with utils/hsq -d + utils/tu -u)
   3. builds every translated phrase/command file (always re-run)
   4. regenerates the intro title card ("DUNE" -> "חולית") inside
-     build/INTDS.HSQ (always re-run, see patch_intro_title.py)
+     build/INTDS.HSQ (always re-run, see patch_intro_title.py), then adds
+     this translation's own logo badge under the "Interactive Entertainment
+     Systems" credit line in that same file (see patch_intro_logo.py)
   5. copies the results from build/ into game/, overwriting the originals
   6. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
      sietch) draw in RTL-correct order (idempotent, backs up on first run)
@@ -39,6 +41,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import patch_intro_logo
 import patch_intro_title
 import patch_location_name_order
 import patch_rtl_engine
@@ -373,6 +376,7 @@ def main():
 
     print("[4/8] regenerating intro title card (INTDS.HSQ)")
     intro_title_hsq, _intro_title_height = patch_intro_title.build()
+    intro_title_hsq, _intro_logo_height = patch_intro_logo.build()
 
     print("[5/8] installing into game/")
     install_to_game([font_hsq, intro_title_hsq] + phrase_files)
