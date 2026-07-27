@@ -131,13 +131,16 @@ automation; see [jdmichaud/dosbox-mcp](https://github.com/jdmichaud/dosbox-mcp))
 running the actual game out of `game/`. Prefer this over asking the
 user to check a rendering by hand when it's available.
 
-If it isn't set up yet, offer to build it — see the "Setting up
-DOSBox-X + dosbox-mcp" walkthrough this repo's history was built with:
-apt-installing DOSBox-X's build deps, compiling
-`lokkju/dosbox-x-remotedebug` with
-`--enable-remotedebug --disable-libfluidsynth --disable-mt32`, cloning
-`jdmichaud/dosbox-mcp`, and running its `install.py` at project scope
-with a conf that mounts this repo's `game/` as `C:`.
+If it isn't set up yet, offer to run `./utils/setup_dosbox_mcp.sh` — it
+automates the whole walkthrough this repo's history was originally built
+with by hand: apt-installing DOSBox-X's build deps, cloning and building
+the patched `dosbox-x-remotedebug` fork (see the script header for which
+fork/branch and why), cloning `jdmichaud/dosbox-mcp`, writing a conf that
+mounts this repo's `game/` as `C:` and autoruns `COMM.BAT`, running
+`install.py` at project scope, and patching in the `XMODIFIERS=""`
+workaround below (which `install.py` doesn't set itself). Idempotent —
+safe to re-run if the setup ever needs refreshing. See README.md's
+"Setting up DOSBox-X" section for the user-facing version of this.
 
 Facts worth knowing when using it:
 - The base conf auto-mounts `game/` as `C:` **and auto-runs `DUNE.BAT`**

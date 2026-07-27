@@ -179,6 +179,7 @@ All scripts live in `utils/`.
 - **`utils/patch_intro_logo.py`** — adds the `assets/hebrew_adv_pixel.png` logo badge below the "Interactive Entertainment Systems" credit line; see "The intro title card" above.
 - **`utils/extract_sprites.py`** — dumps every sprite from every `game/*.HSQ` file that uses the picture-resource format as individually named PNGs (`tmp/sprites/<NAME>/<index>_<w>x<h>.png`), for browsing the game's art assets. Skips files in other formats (text tables, font table, sound/music data, a few unidentified containers) and lists them in `tmp/sprites/EXTRACTION_REPORT.txt` along with why. Read-only — never touches `org_files/`, `translations/`, or `game/`.
 - **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
+- **`utils/setup_dosbox_mcp.sh`** — one-shot bootstrap for the DOSBox-X + dosbox-mcp dev toolchain on a fresh machine; see "Setting up DOSBox-X" below.
 
 ## Testing in-game
 
@@ -200,3 +201,30 @@ server (a wrapper around a GDB/QMP-automatable DOSBox-X fork,
 This is an optional, per-machine dev-tool setup — nothing in the build
 pipeline depends on it. Ask Claude to set it up if you want automated
 visual QA instead of running the game by hand.
+
+## Setting up DOSBox-X
+
+`./utils/setup_dosbox_mcp.sh` bootstraps everything `run_dune.sh` and the
+`dosbox-mcp` MCP server need on a fresh machine: system build dependencies
+(apt on Linux, Homebrew on macOS — installing Homebrew itself first if
+needed), a patched `dosbox-x-remotedebug` clone (built to
+`~/dosbox-mcp-tools/dosbox-x-remotedebug/src/dosbox-x`), a `dosbox-mcp`
+clone, a base conf that mounts this repo's `game/` as `C:` and autoruns
+`COMM.BAT`, and the MCP server registration in Claude Code. On Linux it
+also patches in the `XMODIFIERS=""` workaround for an SDL1+ibus crash (not
+applicable on macOS — see the script's own header comment for why). Works
+on Linux and macOS (arm64 or x86_64, native build — `build-macos` on
+Apple Silicon, no Rosetta needed). It's safe to re-run any time; every
+step is idempotent. Run it with no arguments for an interactive first
+pass (prompts before installing system packages), or `--yes` for
+unattended use. `--skip-deps` skips the system-package step entirely;
+`--rebuild` forces a rebuild of the DOSBox-X binary even if one already
+exists.
+
+The `dosbox-x-remotedebug` build defaults to a personal fork
+([anetanel/dosbox-x-remotedebug](https://github.com/anetanel/dosbox-x-remotedebug),
+branch `fix-gdb-breakpoint-address-decomposition`) rather than upstream
+directly, because it carries a GDB breakpoint-address fix not yet merged
+upstream — see the script header for the full rationale and override env
+vars (`DOSBOX_TOOLS_DIR`, `DOSBOX_REMOTEDEBUG_REPO`,
+`DOSBOX_REMOTEDEBUG_BRANCH`, `DOSBOX_MCP_REPO`).
