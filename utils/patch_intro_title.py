@@ -76,6 +76,11 @@ see fonts/AharoniCLM-LICENSE), chosen to match the bold, tall/narrow block
 lettering on the actual Israeli ("Bug Games") retail release's box art,
 which this translation's title deliberately echoes.
 
+TITLE_SCALE shrinks this sprite below (see its own docstring) as part of
+keeping INTDS.HSQ's total decompressed size under
+patch_intro_logo.INTDS_DECOMPRESSED_SAFE_CEILING -- see that constant's
+docstring for why this file has a hard memory ceiling at all.
+
 Usage:
     ./patch_intro_title.py
 
@@ -115,7 +120,12 @@ SPRITE_WIDTH = 320  # full VGA width, matches every other sprite in this file
 # DOSBox-X (see repo history for the iteration -- these aren't derived from
 # anything, just the values that looked right).
 WORK_SCALE = 16       # supersampling factor before the final box-filter downsample
-FONT_SIZE = 68 * WORK_SCALE   # effective ~68px final glyph size, confirmed to look good by eye
+TITLE_SCALE = 0.75    # shrinks the title card to reduce INTDS.HSQ's memory footprint
+                      # (see patch_intro_logo.py's INTDS_DECOMPRESSED_SAFE_CEILING --
+                      # this sprite's growth, combined with the logo badge below it,
+                      # was tipping the book-page-exhaustion play_credits allocation
+                      # into an OOM crash-to-DOS)
+FONT_SIZE = round(68 * TITLE_SCALE) * WORK_SCALE   # effective ~68px final glyph size, confirmed to look good by eye, now scaled down
 TARGET_WIDTH_FRAC = 0.66   # total letter+spacing width, as a fraction of the sprite width
 V_STRETCH = 1.3       # vertical stretch applied to the rendered glyphs
 H_STRETCH = 1.18      # horizontal stretch applied to the rendered glyphs

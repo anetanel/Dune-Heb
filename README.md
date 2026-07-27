@@ -42,7 +42,7 @@ licensed under the GPLv2 (see `fonts/AharoniCLM-LICENSE`).
 | `fonts/` | Third-party font files used to render non-DUNECHAR graphics (currently just the intro title card) | yes |
 | `assets/` | Other source images spliced into game graphics (currently just the intro credits' logo badge) | yes |
 | `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py`, `bigs_sprite.py`, `patch_intro_title.py`, `patch_intro_logo.py` | yes |
-| `org_files/` | Unmodified original `.HSQ` files, verified by checksum | **no** (gitignored) |
+| `org_files/` | Unmodified original files, verified by checksum: the five `.HSQ` files this pipeline replaces, plus `DUNEPRG.EXE` (patched in place rather than replaced, so it needs its own pristine reference too) | **no** (gitignored) |
 | `game/` | Your copy of the full game install; also the final install target | **no** (gitignored) |
 | `build/` | Final translated `.HSQ` outputs, ready to install | yes |
 | `tmp/` | Intermediate working files, including each `<NAME>.TXT` (English reference text, regenerated on demand — see below) | **no** (gitignored) |
@@ -163,6 +163,24 @@ in place rather than touching its screen position. `build_translation.py`
 runs both on every build; run `./utils/patch_intro_title.py` then
 `./utils/patch_intro_logo.py` directly to regenerate just this file.
 
+Both scripts keep `INTDS.HSQ`'s own decompressed size under a live-tested
+ceiling (`patch_intro_logo.INTDS_DECOMPRESSED_SAFE_CEILING`) and refuse to
+build past it: this file stays resident when the History book's
+page-exhaustion `play_credits`/`CREDITS.HNM` easter egg loads (reading a
+topic to its last page, then clicking "next" once more), and growing it
+past that point was confirmed live to starve that allocation into an
+out-of-memory crash-to-DOS — reproducible even on the pristine, unmodified
+original game/assets, so it's an inherent 1992-engine memory margin, not a
+bug in anything this pipeline adds. If a future change to the title card
+or logo trips this ceiling, the fix belongs in those assets' own pixel
+dimensions/detail level (see `patch_intro_title.TITLE_SCALE` and the
+logo's own native size), not in a code workaround — and a hand-drawn
+pixel-art asset should be authored at its exact intended on-screen size
+rather than rendered large and downscaled at build time, since
+antialiasing/blending during a runtime resize both looks worse at this
+scale and fragments this sprite format's per-row RLE encoding, inflating
+the very size this ceiling is guarding.
+
 ## Scripts
 
 All scripts live in `utils/`.
@@ -176,9 +194,8 @@ All scripts live in `utils/`.
 - **`utils/hsq.py`** / **`utils/tu.py`** — pure-Python HSQ compression/decompression and phrase-binary pack/unpack, ported from the upstream `hsq.c`/`tu.c` (kept in `utils/` for reference, along with the `Makefile`, but no longer built or used — no C compiler required).
 - **`utils/bigs_sprite.py`** — decode/encode for the picture-resource sprite container format (see "The intro title card" above).
 - **`utils/patch_intro_title.py`** — regenerates the intro's "DUNE" -> "חולית" title sprite; see "The intro title card" above.
-- **`utils/patch_intro_logo.py`** — adds the `assets/hebrew_adv_pixel.png` logo badge below the "Interactive Entertainment Systems" credit line; see "The intro title card" above.
+- **`utils/patch_intro_logo.py`** — adds the `assets/hebrew_adv_pixel.png` logo badge below the "Interactive Entertainment Systems" credit line; see "The intro title card" above. Also enforces `INTDS_DECOMPRESSED_SAFE_CEILING`, a live-tested ceiling on `INTDS.HSQ`'s own decompressed size: going over it was confirmed (by live bisection in DOSBox-X) to starve the History-book's page-exhaustion `play_credits`/`CREDITS.HNM` easter egg into an out-of-memory crash-to-DOS that corrupts the DOS MCB chain. The fix is keeping this sprite file's own size under that ceiling (currently: a shrunk title card plus a logo hand-authored at its exact on-screen pixel size, no runtime rescaling) — not a code patch, since the crash reproduces even on the pristine, unmodified original game/assets once this file's size crosses the same threshold.
 - **`utils/extract_sprites.py`** — dumps every sprite from every `game/*.HSQ` file that uses the picture-resource format as individually named PNGs (`tmp/sprites/<NAME>/<index>_<w>x<h>.png`), for browsing the game's art assets. Skips files in other formats (text tables, font table, sound/music data, a few unidentified containers) and lists them in `tmp/sprites/EXTRACTION_REPORT.txt` along with why. Read-only — never touches `org_files/`, `translations/`, or `game/`.
-- **`utils/patch_book_page_exhaustion.py`** — one-byte `game/DUNEPRG.EXE` patch (run automatically by `build_translation.py`) that stops the History/book window from crashing to DOS when a topic's last page is exceeded. Reading a topic to its true end and clicking "next page" once more used to load a `CREDITS.HNM` easter egg whose memory needs are already marginal in the base 1992 engine — our RTL-cave TSR's small resident footprint was just enough to tip that into an outright allocation failure and a DOS-MCB-corrupting crash. The patch makes that code path always take the same safe "can't go further" branch already used on repeat visits, instead of ever loading the credits video.
 - **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
 - **`utils/setup_dosbox_mcp.sh`** — one-shot bootstrap for the DOSBox-X + dosbox-mcp dev toolchain on a fresh machine; see "Setting up DOSBox-X" below.
 

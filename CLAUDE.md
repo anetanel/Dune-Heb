@@ -22,9 +22,13 @@ of the pipeline — see below.
 
 ## Directory roles (do not blur these)
 
-- `org_files/` — unmodified original `.HSQ` files, identified and repaired by
-  **content hash**, never by filename. `utils/build_translation.py`'s
-  `ensure_org_files()` is the only code that should write here.
+- `org_files/` — unmodified original files this pipeline replaces or
+  patches: the five `.HSQ` files, plus `DUNEPRG.EXE` (patched in place by
+  `patch_location_name_order.py`/`patch_rtl_engine.py`, never copied from
+  `build/`, so it needs its own pristine reference here too). Identified
+  and repaired by **content hash**, never by filename.
+  `utils/build_translation.py`'s `ensure_org_files()` is the only code that
+  should write here.
 - `translations/` — human-edited Hebrew source. Never write to these
   programmatically except via the translator's own edits.
 - `build/` — only ever contains *final* installable `.HSQ` outputs. Never put

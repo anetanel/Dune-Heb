@@ -40,6 +40,14 @@ values (so the credit line itself is visually unchanged), and the
 now-free remaining nibbles carry the logo's own colors. This keeps every
 other sprite in the file byte-identical.
 
+This script (and patch_intro_title.py before it) also enforces
+INTDS_DECOMPRESSED_SAFE_CEILING, a live-tested cap on INTDS.HSQ's own
+decompressed size -- see that constant's own docstring below for the full
+story; in short, growing this file past it was confirmed to crash the
+History book's page-exhaustion play_credits/CREDITS.HNM easter egg to DOS,
+even on the pristine original game/assets, so it's a hard build-time
+refusal, not a tunable.
+
 Usage:
     ./patch_intro_logo.py
 
@@ -75,17 +83,43 @@ NIBBLE_TRANSPARENT = 0
 # same technique patch_intro_title.py validated for sprite 5's rule line.
 GAP_ROWS = 4  # blank rows between the credit text and the logo
 
-# The logo source is scaled to span the credit line's own width, so it
-# reads as one continuous block with the text above it. BOX (a plain area
-# average, same choice patch_intro_title.py's own supersample-then-downsample
-# step makes) rather than LANCZOS -- LANCZOS's negative-lobe ringing on this
-# flat-color, hard-edged badge was overshooting alpha/color values right at
-# letter and border edges, which the nearest-color quantization below then
-# snapped to the *wrong* color -- visible in-game as small holes punched
-# into letter strokes and stray-color fringes along the box border.
-LOGO_RESAMPLE = Image.BOX
+# assets/hebrew_adv_pixel.png is rendered at its own native pixel size (no
+# resize), centered in the 292px-wide canvas (transparent padding either
+# side) -- it's hand-authored at the intended on-screen footprint (219x45)
+# specifically to survive this sprite format's 4bpp/per-row-RLE encoding and
+# stay legible at in-game scale. An earlier version of this script instead
+# scaled a larger source image down at build time (BOX-resampled to fit);
+# that repeatedly failed live -- both visually (blurry at small sizes) and
+# on INTDS_DECOMPRESSED_SAFE_CEILING below (BOX's edge blending creates
+# scattered intermediate colors that fragment this format's per-row RLE,
+# inflating the packed size well beyond what the same pixels would cost as
+# hard-edged art). If this sprite's total growth ever needs to shrink again
+# (e.g. a future redesign, or a bigger TITLE_SCALE eating into the shared
+# budget), the fix belongs in the source PNG's own dimensions/detail level,
+# not in a rescale step here.
 
 ALPHA_OPAQUE_THRESHOLD = 128
+
+# Live-tested memory-safety ceiling on INTDS.HSQ's own DECOMPRESSED size
+# (org_files/INTDS.HSQ decompresses to 25,390 bytes). Crossing this was
+# confirmed live (dosbox-mcp bisection, with today's translation files
+# installed and the RTL-cave TSR resident) to starve the History-book's
+# page-exhaustion play_credits/CREDITS.HNM easter egg allocation into an
+# OOM crash-to-DOS that corrupts the DOS MCB chain on the way out --
+# reproducible even on the pristine, unmodified original game/assets once
+# this file's size crosses the same threshold, so it's an inherent 1992-
+# engine memory margin, not a bug in anything this pipeline adds. Confirmed
+# empirically: title@75%+logo@100% (~27,924B, today's shipped size) is
+# safe; title@100%+logo@56.25% (28,144B) crashed. This is INTDS.HSQ's OWN
+# size specifically, not a sum with the phrase/command files -- bisection
+# showed those files' own size changes don't matter here (only INTDS.HSQ is
+# still resident when play_credits runs); don't fold them into this check.
+# There is no known way to compute this threshold from first principles
+# (it's an emergent property of the 1992 engine's own, already-marginal
+# memory budget for this one obscure code path) -- if this ever needs to
+# move, it must be re-derived by live bisection, the same way it was found,
+# not adjusted by guesswork.
+INTDS_DECOMPRESSED_SAFE_CEILING = 27_950
 
 
 def _color_distance(a, b):
@@ -129,20 +163,24 @@ def load_remapped_credit_grid(dec):
     return new_grid, nibble_to_color, sprite["width"]
 
 
-def build_logo_grid(target_width, color_to_nibble):
-    """Loads and quantizes the logo into a nibble grid `target_width` wide
-    (aspect ratio preserved), using color_to_nibble (keyed by the exact RGB
-    triples load_logo_colors() found) for its opaque colors.
+def build_logo_grid(color_to_nibble):
+    """Quantizes the logo into a nibble grid at its own native pixel size
+    (no resize) -- assets/hebrew_adv_pixel.png is hand-authored at the
+    intended on-screen footprint already (see the module-level comment
+    above ALPHA_OPAQUE_THRESHOLD), so resampling here would only
+    reintroduce the blended-edge/anti-aliasing artifacts that made an
+    earlier, algorithmically-shrunk version both blurry and worse for RLE
+    packing. color_to_nibble is keyed by the exact RGB triples
+    load_logo_colors() found for its opaque colors.
     """
     img = Image.open(LOGO_PATH).convert("RGBA")
-    target_height = round(img.height * target_width / img.width)
-    img = img.resize((target_width, target_height), LOGO_RESAMPLE)
+    width, height = img.size
 
     colors = list(color_to_nibble)
     px = img.load()
-    grid = [[NIBBLE_TRANSPARENT] * target_width for _ in range(target_height)]
-    for y in range(target_height):
-        for x in range(target_width):
+    grid = [[NIBBLE_TRANSPARENT] * width for _ in range(height)]
+    for y in range(height):
+        for x in range(width):
             r, g, b, a = px[x, y]
             if a < ALPHA_OPAQUE_THRESHOLD:
                 continue
@@ -173,15 +211,17 @@ def build_credit_replacement(dec):
         nibble_to_color[next_nibble] = rgb
         next_nibble += 1
 
-    logo_grid = build_logo_grid(width, color_to_nibble)
+    logo_grid = build_logo_grid(color_to_nibble)
     logo_h = len(logo_grid)
+    logo_width = len(logo_grid[0]) if logo_grid else 0
+    logo_x = (width - logo_width) // 2  # center the logo in the full-width canvas
 
     height = text_h + GAP_ROWS + logo_h
     grid = [[NIBBLE_TRANSPARENT] * width for _ in range(height)]
     for y, row in enumerate(text_grid):
         grid[y] = row
     for y, row in enumerate(logo_grid):
-        grid[text_h + GAP_ROWS + y] = row
+        grid[text_h + GAP_ROWS + y][logo_x:logo_x + logo_width] = row
 
     palette = {NEW_PALBASE: (0, 0, 0)}  # nibble 0 (transparent) -- color unused by the engine
     for nib, rgb in nibble_to_color.items():
@@ -251,6 +291,17 @@ def build(in_path=None, out_path=None):
     print(f"[intro-logo] recompressing -> {out_path.relative_to(REPO_ROOT)}")
     recompressed = hsq.compress_bytes(new_dec)
     assert hsq.decompress_bytes(recompressed) == new_dec, "recompression round-trip mismatch"
+
+    if len(new_dec) > INTDS_DECOMPRESSED_SAFE_CEILING:
+        sys.exit(
+            f"[intro-logo] REFUSING to build: {out_path.name}'s decompressed size "
+            f"({len(new_dec)}B) exceeds the live-tested memory-safety ceiling "
+            f"({INTDS_DECOMPRESSED_SAFE_CEILING}B, see INTDS_DECOMPRESSED_SAFE_CEILING's "
+            f"docstring in this file). Going past this reintroduces a live crash-to-DOS "
+            f"in the History book's page-exhaustion/credits easter egg. Shrink "
+            f"TITLE_SCALE (patch_intro_title.py) and/or the logo's own pixel "
+            f"dimensions (assets/hebrew_adv_pixel.png) until this passes again."
+        )
 
     BUILD_DIR.mkdir(exist_ok=True)
     out_path.write_bytes(recompressed)

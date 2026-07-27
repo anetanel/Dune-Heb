@@ -19,7 +19,11 @@ this repo). The pipeline then:
   4. regenerates the intro title card ("DUNE" -> "חולית") inside
      build/INTDS.HSQ (always re-run, see patch_intro_title.py), then adds
      this translation's own logo badge under the "Interactive Entertainment
-     Systems" credit line in that same file (see patch_intro_logo.py)
+     Systems" credit line in that same file (see patch_intro_logo.py --
+     both this and the title card are kept under a live-tested combined
+     memory-footprint ceiling, INTDS_DECOMPRESSED_SAFE_CEILING, or the
+     build refuses: going over it was confirmed to starve the History-
+     book's page-exhaustion/CREDITS.HNM easter egg into an OOM crash-to-DOS)
   5. copies the results from build/ into game/, overwriting the originals
   6. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
      sietch) draw in RTL-correct order (idempotent, backs up on first run)
@@ -28,10 +32,10 @@ this repo). The pipeline then:
      EXPERIMENTAL; wired in here specifically so a from-scratch game/
      restore can't silently drop it, as happened once during development)
   8. makes sure game/DUNE.BAT (and game/COMM.BAT, if the installer
-     produced it) launches step 7's RTL cave TSR (game/DUNETSR.COM)
-     before duneprg runs -- required for step 7's patches to have safe
-     memory (idempotent; game/ is gitignored so this can't be shipped as
-     a committed file, must be re-applied every build)
+     produced it) launches step 7's RTL cave TSR (game/DUNETSR.COM) via
+     `LH` (LOADHIGH) before duneprg runs -- required for step 7's patches
+     to have safe memory (idempotent; game/ is gitignored so this can't be
+     shipped as a committed file, must be re-applied every build)
 """
 
 import argparse
@@ -41,7 +45,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import patch_book_page_exhaustion
 import patch_intro_logo
 import patch_intro_title
 import patch_location_name_order
@@ -61,13 +64,25 @@ FONT_BIN = UTILS_DIR / "font.py"
 
 GAME_SENTINEL = "DUNEPRG.EXE"
 
-# Known-good md5sums for the four unmodified originals this pipeline replaces.
+# Known-good md5sums for the unmodified originals this pipeline replaces or
+# patches in place. DUNEPRG.EXE is here (unlike the .HSQ files, it's never
+# copied from build/ -- patch_location_name_order.py/patch_rtl_engine.py
+# patch it in game/ directly) specifically so a pristine copy always
+# survives in org_files/ even if every game/ install in reach has already
+# been patched -- each patch script also makes its own game/DUNEPRG.EXE
+# .orig-backup on first write, but that's a single working copy's safety
+# net, not a hash-verified canonical source ensure_org_files() can repair
+# from. Losing track of which DUNEPRG.EXE was truly pristine once already
+# cost a live debugging session real time hunting through unrelated
+# Documents//Downloads/ copies for a byte-identical original -- this entry
+# is what should prevent a repeat.
 EXPECTED_MD5 = {
     "COMMAND1.HSQ": "dc5615a5399182e462ad25c69cb53ffe",
     "DUNECHAR.HSQ": "e28fc15009f666f7e3dc34c0b969f7a3",
     "PHRASE11.HSQ": "5b12b3ca83fc0cd3c90f9a8958f4efab",
     "PHRASE12.HSQ": "46150b9b41dc8528602e422c20a86a9c",
     "INTDS.HSQ": "aac0e6cb4af3626c88316b60d9a8c918",
+    "DUNEPRG.EXE": "b716adaedab07867672624f740076336",
 }
 
 # Font glyph positions loaded from font_png/, ported from load_heb_font.sh.
@@ -118,9 +133,11 @@ def check_game_dir_populated():
 
 
 def ensure_org_files():
-    """Verify org_files/<name>.HSQ against its expected md5, repairing from
-    game/ (any filename) if missing or mismatched. Never trusts a filename
-    alone -- only a matching hash makes a file canonical.
+    """Verify each org_files/<name> (the five .HSQ files this pipeline
+    replaces, plus DUNEPRG.EXE, which it patches in place) against its
+    expected md5, repairing from game/ (any filename) if missing or
+    mismatched. Never trusts a filename alone -- only a matching hash makes
+    a file canonical.
     """
     ORG_FILES_DIR.mkdir(exist_ok=True)
     game_candidates = [p for p in GAME_DIR.iterdir() if p.is_file()] if GAME_DIR.exists() else []
@@ -341,8 +358,22 @@ def ensure_launcher_bats_launch_tsr():
     and, at least for some sound-driver configs, also COMM.BAT -- a second
     launcher that runs `duneprg` directly with its own driver flags. Either
     one bypasses the TSR if left unpatched, so both get the same treatment;
-    COMM.BAT is skipped if a given game/ install doesn't have it."""
+    COMM.BAT is skipped if a given game/ install doesn't have it.
+
+    Launched via `LH` (LOADHIGH) rather than bare, so the TSR's ~496-byte
+    resident footprint comes out of upper memory (UMB) instead of
+    conventional memory when UMBs are available -- basic hygiene (frees
+    conventional memory the game itself could otherwise use), though
+    *not* what fixes the book-page-exhaustion play_credits crash: live
+    A/B testing (moving the TSR to UMB alone, then testing the pristine
+    original EXE/assets with zero TSR at all) proved that crash is instead
+    driven by INTDS.HSQ's own decompressed size -- see
+    patch_intro_logo.py's INTDS_DECOMPRESSED_SAFE_CEILING, which is the
+    actual fix. `LH` is a no-op fallback (loads low, as before) on any
+    DOS/DOSBox setup without UMBs, so this is safe everywhere, not just
+    DOSBox-X with `umb=true`."""
     tsr_stem = Path(patch_rtl_engine.TSR_NAME).stem.encode()  # b"DUNETSR"
+    tsr_line = b"LH " + tsr_stem
     for bat_name in GAME_LAUNCHER_BATS:
         bat_path = GAME_DIR / bat_name
         if not bat_path.exists():
@@ -350,13 +381,14 @@ def ensure_launcher_bats_launch_tsr():
             continue
         data = bat_path.read_bytes()
         lines = data.split(b"\r\n")
-        if any(line.strip().upper() == tsr_stem for line in lines):
-            print(f"[{bat_name.lower()}] already launches {tsr_stem.decode()}, skipping")
+        if any(line.strip().upper() == tsr_line for line in lines):
+            print(f"[{bat_name.lower()}] already launches {tsr_line.decode()}, skipping")
             continue
+        lines = [line for line in lines if line.strip().upper() != tsr_stem]
         insert_at = 1 if lines and lines[0].strip().upper() == b"@ECHO OFF" else 0
-        lines.insert(insert_at, tsr_stem)
+        lines.insert(insert_at, tsr_line)
         bat_path.write_bytes(b"\r\n".join(lines))
-        print(f"[{bat_name.lower()}] inserted '{tsr_stem.decode()}' launch line")
+        print(f"[{bat_name.lower()}] inserted '{tsr_line.decode()}' launch line")
 
 
 def main():
@@ -366,32 +398,29 @@ def main():
 
     check_game_dir_populated()
 
-    print("[1/9] verifying org_files/")
+    print("[1/8] verifying org_files/")
     ensure_org_files()
 
-    print("[2/9] building Hebrew font")
+    print("[2/8] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[3/9] building translated phrase/command files")
+    print("[3/8] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[4/9] regenerating intro title card (INTDS.HSQ)")
+    print("[4/8] regenerating intro title card (INTDS.HSQ)")
     intro_title_hsq, _intro_title_height = patch_intro_title.build()
     intro_title_hsq, _intro_logo_height = patch_intro_logo.build()
 
-    print("[5/9] installing into game/")
+    print("[5/8] installing into game/")
     install_to_game([font_hsq, intro_title_hsq] + phrase_files)
 
-    print("[6/9] patching game/DUNEPRG.EXE location-name draw order")
+    print("[6/8] patching game/DUNEPRG.EXE location-name draw order")
     patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
 
-    print("[7/9] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
+    print("[7/8] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
     patch_rtl_engine.apply_patches(GAME_DIR / patch_rtl_engine.EXE_NAME)
 
-    print("[8/9] patching game/DUNEPRG.EXE to stop book page-exhaustion from crashing")
-    patch_book_page_exhaustion.apply_patches(GAME_DIR / patch_book_page_exhaustion.EXE_NAME)
-
-    print("[9/9] ensuring game launcher .BAT files launch the RTL cave TSR")
+    print("[8/8] ensuring game launcher .BAT files launch the RTL cave TSR")
     ensure_launcher_bats_launch_tsr()
 
     print("Done.")
