@@ -25,8 +25,13 @@ this repo). The pipeline then:
      build refuses: going over it was confirmed to starve the History-
      book's page-exhaustion/CREDITS.HNM easter egg into an OOM crash-to-DOS)
   5. copies the results from build/ into game/, overwriting the originals
-  6. patches game/DUNEPRG.EXE so map/globe location names (e.g. area +
-     sietch) draw in RTL-correct order (idempotent, backs up on first run)
+  6. resets game/DUNEPRG.EXE from the hash-verified org_files/ copy, then
+     patches it so map/globe location names (e.g. area + sietch) draw in
+     RTL-correct order (backs up the pristine copy on first run). The
+     reset always runs first -- the EXE is patched in place and its edits
+     would otherwise accumulate across builds, silently preserving a patch
+     a later commit had already removed from the codebase (this bit us
+     once with the book page-exhaustion credits-block patch)
   7. patches game/DUNEPRG.EXE so dialogue/subtitle text renders Hebrew
      natively right-to-left (idempotent, see patch_rtl_engine.py --
      EXPERIMENTAL; wired in here specifically so a from-scratch game/
@@ -297,9 +302,10 @@ def ensure_english_txt(name):
 # unlike every other menu-option line around it (67-73, 76-83) -- a sign
 # it's drawn as a dialogue/notification-style message through the
 # RTL-patched draw_subtitle_body path rather than the plain LTR menu-list
-# draw, same category as the intro-narration range above. Not yet
-# confirmed in-game as of this comment; index 73 (the sibling line) not
-# yet reported broken but suspected to need the same fix.
+# draw, same category as the intro-narration range above. User confirmed
+# fixed in-game. As suspected, index 73 (the sibling line, "show me where
+# you'd like [me] to travel...") was later also reported reversed
+# in-game -- same no-padding signature, same fix applied.
 #
 # 230-235, 237, 244-245 (translator's 1-based lines 231-236, 238, 245-246):
 # the History-book "quote" entries' speaker-attribution headers ("Duncan
@@ -314,7 +320,7 @@ def ensure_english_txt(name):
 # 245-246), not just the one reported line, since they're structurally
 # identical. 236/239-243 are blank placeholder lines, skipped.
 COMMAND1_NATURAL_LINES = (
-    set(range(267, 275)) | {74} | {230, 231, 232, 233, 234, 235, 237, 244, 245}
+    set(range(267, 275)) | {73, 74} | {230, 231, 232, 233, 234, 235, 237, 244, 245}
 )
 
 
@@ -339,6 +345,23 @@ def install_to_game(built_files):
         dest = GAME_DIR / path.name
         shutil.copy2(path, dest)
         print(f"[install] {path.relative_to(REPO_ROOT)} -> {dest.relative_to(REPO_ROOT)}")
+
+
+def reset_game_exe():
+    """Reset game/DUNEPRG.EXE from the hash-verified org_files/ copy before
+    patching it, every run -- never patch whatever happens to already be
+    sitting in game/. Unlike the .HSQ files (rebuilt fresh into build/ and
+    copied over every run), the EXE is patched in place, so its edits
+    accumulate across builds. That silently preserved a patch a later
+    commit had removed from the codebase (the book page-exhaustion
+    credits-block patch) in a real session -- game/ still carried the old
+    byte because nothing ever reset it to pristine first. ensure_org_files()
+    has already hash-verified org_files/DUNEPRG.EXE by the time this runs.
+    """
+    src = ORG_FILES_DIR / GAME_SENTINEL
+    dest = GAME_DIR / GAME_SENTINEL
+    shutil.copy2(src, dest)
+    print(f"[reset] {dest.relative_to(REPO_ROOT)} <- org_files/{GAME_SENTINEL} (pristine)")
 
 
 GAME_LAUNCHER_BATS = ["DUNE.BAT", "COMM.BAT"]
@@ -413,6 +436,9 @@ def main():
 
     print("[5/8] installing into game/")
     install_to_game([font_hsq, intro_title_hsq] + phrase_files)
+
+    print("[6/8] resetting game/DUNEPRG.EXE to pristine before patching")
+    reset_game_exe()
 
     print("[6/8] patching game/DUNEPRG.EXE location-name draw order")
     patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
