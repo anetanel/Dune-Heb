@@ -41,6 +41,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import patch_book_page_exhaustion
 import patch_intro_logo
 import patch_intro_title
 import patch_location_name_order
@@ -365,29 +366,32 @@ def main():
 
     check_game_dir_populated()
 
-    print("[1/8] verifying org_files/")
+    print("[1/9] verifying org_files/")
     ensure_org_files()
 
-    print("[2/8] building Hebrew font")
+    print("[2/9] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[3/8] building translated phrase/command files")
+    print("[3/9] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[4/8] regenerating intro title card (INTDS.HSQ)")
+    print("[4/9] regenerating intro title card (INTDS.HSQ)")
     intro_title_hsq, _intro_title_height = patch_intro_title.build()
     intro_title_hsq, _intro_logo_height = patch_intro_logo.build()
 
-    print("[5/8] installing into game/")
+    print("[5/9] installing into game/")
     install_to_game([font_hsq, intro_title_hsq] + phrase_files)
 
-    print("[6/8] patching game/DUNEPRG.EXE location-name draw order")
+    print("[6/9] patching game/DUNEPRG.EXE location-name draw order")
     patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
 
-    print("[7/8] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
+    print("[7/9] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
     patch_rtl_engine.apply_patches(GAME_DIR / patch_rtl_engine.EXE_NAME)
 
-    print("[8/8] ensuring game launcher .BAT files launch the RTL cave TSR")
+    print("[8/9] patching game/DUNEPRG.EXE to stop book page-exhaustion from crashing")
+    patch_book_page_exhaustion.apply_patches(GAME_DIR / patch_book_page_exhaustion.EXE_NAME)
+
+    print("[9/9] ensuring game launcher .BAT files launch the RTL cave TSR")
     ensure_launcher_bats_launch_tsr()
 
     print("Done.")
