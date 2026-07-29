@@ -228,7 +228,7 @@ visual QA instead of running the game by hand.
 needed), a patched `dosbox-x-remotedebug` clone (built to
 `~/dosbox-mcp-tools/dosbox-x-remotedebug/src/dosbox-x`), a `dosbox-mcp`
 clone, a base conf that mounts this repo's `game/` as `C:` and autoruns
-`COMM.BAT`, and the MCP server registration in Claude Code. On Linux it
+`DUNE.BAT`, and the MCP server registration in Claude Code. On Linux it
 also patches in the `XMODIFIERS=""` workaround for an SDL1+ibus crash (not
 applicable on macOS — see the script's own header comment for why). Works
 on Linux and macOS (arm64 or x86_64, native build — `build-macos` on

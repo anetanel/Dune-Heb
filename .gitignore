@@ -37,3 +37,6 @@ __pycache__/
 /DUNECD/
 /DUNE_CD/
 /Dune.iso
+
+# Packaged game zip (utils/package_dune_zip.py output; regenerate on demand)
+/DUNE.zip

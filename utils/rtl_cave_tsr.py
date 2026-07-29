@@ -30,7 +30,7 @@ game's bump allocator, which only ever computes addresses relative to its
 own segment registers, has no way to reach across into the TSR's
 independently-owned block. This requires the TSR to load and go resident
 BEFORE DUNEPRG.EXE starts (see build_translation.py's launcher-.BAT
-handling -- DUNE.BAT and, if present, COMM.BAT).
+handling -- DUNE.BAT).
 
 PROTOCOL
 --------

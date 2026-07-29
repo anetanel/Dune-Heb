@@ -207,7 +207,7 @@ else
     git clone "$MCP_REPO" "$MCP_DIR"
 fi
 
-# --- 5. Base dosbox.conf: mount this repo's game/ as C:, autorun COMM.BAT
+# --- 5. Base dosbox.conf: mount this repo's game/ as C:, autorun DUNE.BAT
 log "Writing base conf"
 if [ -f "$CONF_PATH" ]; then
     info "$CONF_PATH already exists — leaving it alone"
@@ -231,9 +231,9 @@ cputype=auto
 [autoexec]
 MOUNT C: $REPO_ROOT/game
 C:
-COMM.BAT
+DUNE.BAT
 EOF
-    info "wrote $CONF_PATH (mounts $REPO_ROOT/game as C:, autoruns COMM.BAT)"
+    info "wrote $CONF_PATH (mounts $REPO_ROOT/game as C:, autoruns DUNE.BAT)"
 fi
 
 # --- 6. Register the MCP server with Claude Code --------------------------

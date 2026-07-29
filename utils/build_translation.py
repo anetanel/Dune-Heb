@@ -36,11 +36,11 @@ this repo). The pipeline then:
      natively right-to-left (idempotent, see patch_rtl_engine.py --
      EXPERIMENTAL; wired in here specifically so a from-scratch game/
      restore can't silently drop it, as happened once during development)
-  8. makes sure game/DUNE.BAT (and game/COMM.BAT, if the installer
-     produced it) launches step 7's RTL cave TSR (game/DUNETSR.COM) via
-     `LH` (LOADHIGH) before duneprg runs -- required for step 7's patches
-     to have safe memory (idempotent; game/ is gitignored so this can't be
-     shipped as a committed file, must be re-applied every build)
+  8. makes sure game/DUNE.BAT launches step 7's RTL cave TSR
+     (game/DUNETSR.COM) via `LH` (LOADHIGH) before duneprg runs --
+     required for step 7's patches to have safe memory (idempotent;
+     game/ is gitignored so this can't be shipped as a committed file,
+     must be re-applied every build)
 """
 
 import argparse
@@ -364,24 +364,22 @@ def reset_game_exe():
     print(f"[reset] {dest.relative_to(REPO_ROOT)} <- org_files/{GAME_SENTINEL} (pristine)")
 
 
-GAME_LAUNCHER_BATS = ["DUNE.BAT", "COMM.BAT"]
+GAME_LAUNCHER_BAT = "DUNE.BAT"
 
 
-def ensure_launcher_bats_launch_tsr():
+def ensure_launcher_bat_launches_tsr():
     """patch_rtl_engine's caves live in a separate TSR (see
     dune_rtl_tsr_cave_technique project memory: appending them to
     DUNEPRG.EXE's own memory gets them silently overwritten by the game's
     own runtime resource loader) that must go resident *before* duneprg
-    runs. game/ is gitignored -- a fresh game/ install's batch files have
+    runs. game/ is gitignored -- a fresh game/ install's batch file has
     no way to already contain this, so unlike the EXE patches above (which
     persist in the binary itself), this needs re-applying every time,
     idempotently, same spirit as patch_rtl_engine.detect_patched().
 
-    The installer produces DUNE.BAT (the one the manual tells you to run)
-    and, at least for some sound-driver configs, also COMM.BAT -- a second
-    launcher that runs `duneprg` directly with its own driver flags. Either
-    one bypasses the TSR if left unpatched, so both get the same treatment;
-    COMM.BAT is skipped if a given game/ install doesn't have it.
+    The installer produces DUNE.BAT (the one the manual tells you to run,
+    and the only launcher this installer produces). It bypasses the TSR
+    if left unpatched.
 
     Launched via `LH` (LOADHIGH) rather than bare, so the TSR's ~496-byte
     resident footprint comes out of upper memory (UMB) instead of
@@ -397,21 +395,20 @@ def ensure_launcher_bats_launch_tsr():
     DOSBox-X with `umb=true`."""
     tsr_stem = Path(patch_rtl_engine.TSR_NAME).stem.encode()  # b"DUNETSR"
     tsr_line = b"LH " + tsr_stem
-    for bat_name in GAME_LAUNCHER_BATS:
-        bat_path = GAME_DIR / bat_name
-        if not bat_path.exists():
-            print(f"[{bat_name.lower()}] not present in game/, skipping")
-            continue
-        data = bat_path.read_bytes()
-        lines = data.split(b"\r\n")
-        if any(line.strip().upper() == tsr_line for line in lines):
-            print(f"[{bat_name.lower()}] already launches {tsr_line.decode()}, skipping")
-            continue
-        lines = [line for line in lines if line.strip().upper() != tsr_stem]
-        insert_at = 1 if lines and lines[0].strip().upper() == b"@ECHO OFF" else 0
-        lines.insert(insert_at, tsr_line)
-        bat_path.write_bytes(b"\r\n".join(lines))
-        print(f"[{bat_name.lower()}] inserted '{tsr_line.decode()}' launch line")
+    bat_path = GAME_DIR / GAME_LAUNCHER_BAT
+    if not bat_path.exists():
+        print(f"[{GAME_LAUNCHER_BAT.lower()}] not present in game/, skipping")
+        return
+    data = bat_path.read_bytes()
+    lines = data.split(b"\r\n")
+    if any(line.strip().upper() == tsr_line for line in lines):
+        print(f"[{GAME_LAUNCHER_BAT.lower()}] already launches {tsr_line.decode()}, skipping")
+        return
+    lines = [line for line in lines if line.strip().upper() != tsr_stem]
+    insert_at = 1 if lines and lines[0].strip().upper() == b"@ECHO OFF" else 0
+    lines.insert(insert_at, tsr_line)
+    bat_path.write_bytes(b"\r\n".join(lines))
+    print(f"[{GAME_LAUNCHER_BAT.lower()}] inserted '{tsr_line.decode()}' launch line")
 
 
 def main():
@@ -446,8 +443,8 @@ def main():
     print("[7/8] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
     patch_rtl_engine.apply_patches(GAME_DIR / patch_rtl_engine.EXE_NAME)
 
-    print("[8/8] ensuring game launcher .BAT files launch the RTL cave TSR")
-    ensure_launcher_bats_launch_tsr()
+    print("[8/8] ensuring game launcher .BAT launches the RTL cave TSR")
+    ensure_launcher_bat_launches_tsr()
 
     print("Done.")
 

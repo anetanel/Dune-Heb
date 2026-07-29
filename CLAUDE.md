@@ -140,7 +140,7 @@ automates the whole walkthrough this repo's history was originally built
 with by hand: apt-installing DOSBox-X's build deps, cloning and building
 the patched `dosbox-x-remotedebug` fork (see the script header for which
 fork/branch and why), cloning `jdmichaud/dosbox-mcp`, writing a conf that
-mounts this repo's `game/` as `C:` and autoruns `COMM.BAT`, running
+mounts this repo's `game/` as `C:` and autoruns `DUNE.BAT`, running
 `install.py` at project scope, and patching in the `XMODIFIERS=""`
 workaround below (which `install.py` doesn't set itself). Idempotent —
 safe to re-run if the setup ever needs refreshing. See README.md's
