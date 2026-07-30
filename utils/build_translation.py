@@ -91,7 +91,7 @@ EXPECTED_MD5 = {
 }
 
 # Font glyph positions loaded from font_png/, ported from load_heb_font.sh.
-FONT_POSITIONS = [65] + list(range(66, 92)) + [163, 167, 175] + list(range(193, 220)) + \
+FONT_POSITIONS = [65] + list(range(66, 92)) + [163, 167, 173, 175] + list(range(193, 220)) + \
     [34, 35, 39, 45] + list(range(48, 58))
 
 # Blanked to hide the engine's hardcoded English ordinal-day-suffix letters
@@ -208,11 +208,10 @@ def build_font(rebuild=False):
 def dump_font_png(font_bin, out_png):
     """Render font_bin's glyph table to a PNG for visual before/after comparison.
 
-    font.py's --dump takes a (discarded) value only to flag dump mode, and
-    reads the actual glyph-table bytes from the positional input file -- see
-    utils/font.py's argparse setup for VerifyDump/VerifyLoad.
+    font.py's --dump is a boolean flag; it reads the glyph-table bytes from
+    the positional input file, not from --dump itself.
     """
-    run([str(FONT_BIN), str(font_bin), "--dump", "x", "--output", str(out_png)])
+    run([str(FONT_BIN), str(font_bin), "--dump", "--output", str(out_png)])
 
 
 def ensure_english_txt(name):
@@ -307,6 +306,13 @@ def ensure_english_txt(name):
 # you'd like [me] to travel...") was later also reported reversed
 # in-game -- same no-padding signature, same fix applied.
 #
+# 76 (translator's 1-based line 77, "בחר יעד על המפה" / "choose a destination
+# on the map", shown on the ornithopter/travel-target map screen): user
+# reported it painting left-to-right letter by letter. Same no-trailing-"#"
+# signature as 73/74 above -- it's drawn as a dialogue/notification-style
+# message through the RTL-patched draw_subtitle_body path, not the plain LTR
+# menu-list draw. Same fix applied.
+#
 # 230-235, 237, 244-245 (translator's 1-based lines 231-236, 238, 245-246):
 # the History-book "quote" entries' speaker-attribution headers ("Duncan
 # Idaho said to Paul:", "Chani said to Paul:", etc.) -- these entries pair
@@ -319,8 +325,20 @@ def ensure_english_txt(name):
 # the whole set of attribution headers in this block (231-236, 238,
 # 245-246), not just the one reported line, since they're structurally
 # identical. 236/239-243 are blank placeholder lines, skipped.
+#
+# 180 (translator's 1-based line 181, the "you ignored my spice demands"
+# Emperor-tribute-failure epilogue): user reported the on-screen text
+# mirrored letter-by-letter, same no-trailing-"#" signature as 73/74/230s
+# above -- this is a notification message drawn through draw_subtitle_body,
+# not the plain LTR menu draw. Also swapped the two M-separated sentences
+# in the .HEB source itself (independent of the natural-vs-reversed fix):
+# per the command1_intro_text_layout project memory, this two-row COMMAND1
+# layout always renders the segment BEFORE M on the bottom row and the
+# segment AFTER M on the top row, so the source now puts the sentence that
+# should read first (top) after the M and the closing sentence (bottom)
+# before it.
 COMMAND1_NATURAL_LINES = (
-    set(range(267, 275)) | {73, 74} | {230, 231, 232, 233, 234, 235, 237, 244, 245}
+    set(range(267, 275)) | {73, 74, 76, 175, 180} | {230, 231, 232, 233, 234, 235, 237, 244, 245}
 )
 
 

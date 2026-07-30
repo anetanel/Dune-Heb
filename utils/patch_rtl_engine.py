@@ -179,6 +179,20 @@ JUSTIFY_FLIP = False  # flip the 0x97B6 justify pre-adjust add->sub (tuning)
 ENABLE_NAME_REVERSAL = True
 ENABLE_QUANTITY_REVERSAL = True
 
+# Ornithopter destination-map screen's default prompt ("select a
+# destination on the map" -- COMMAND1 0-based line 76, drawn via a
+# dedicated frame-task callback at load offset 0x4ece, NOT draw_subtitle_
+# body): the game reveals this banner one glyph per tick via
+# font_draw_glyph_func_small, starting from a hardcoded LEFT-edge pen X
+# (0x55) and always ADD-ing the glyph width -- entirely independent of the
+# [0x42EC] RTL flag above (that flag is only ever set/cleared by draw_
+# subtitle_body's own hooks, so this callback always drew LTR). Confirmed
+# structurally identical to the CD build's loc_04658/frame_task_callback_
+# 046b5 (see https://thomas.fach-pedersen.net/dune/cryo-dune-3.7-cd-dncdprg.html),
+# and confirmed live (dosbox-mcp) that DS is the game data segment at this
+# callback's own SET/CLEAR bracket points, same as draw_subtitle_body's.
+ENABLE_MAP_BANNER_REVERSAL = True
+
 # ---------------------------------------------------------------------------
 # Cave blob: independent little routines the in-place far calls jump to.
 # Offsets within the blob are computed after their bytes are known.
@@ -454,6 +468,48 @@ QUANTITY_EXIT_CAVE = bytes.fromhex(
 )
 QUANTITY_EXIT_FARJMP_LOCAL_OFF = len(QUANTITY_EXIT_CAVE) - 2  # offset of the trailing far-jmp's seg field
 
+# --- Map-destination-banner reveal caves ---
+#
+# Same SET/CLEAR bracket technique as SET_CAVE/CLEAR_CAVE above, applied
+# to the frame-task callback at load offset 0x4ece instead of draw_
+# subtitle_body. The callback's own "call font_draw_glyph_func_small"
+# (load offset 0x4f01) is left completely untouched -- bracketed instead
+# by two adjacent all-non-call instruction runs that already save/restore
+# the pen position around it, so no CALL instruction ever needs replaying
+# inside a cave living in a different segment (the TSR). The font_set_
+# draw_position/font_select_small_font/font_get_draw_position calls in
+# between (load offsets 0x4ef2/0x4efd/0x4f04) are left unmodified in main
+# and run with the flag already set -- harmless, since none of them touch
+# the shared pen-advance primitive themselves.
+#
+# CLEAR_CAVE's bracket deliberately stops short of the original site's
+# trailing `pop ax` (0x4F0F) -- first version replayed it inside the cave
+# and hung the game on the very first glyph, live-confirmed (dosbox-mcp:
+# CPU wasn't dead, BIOS tick counter still advancing, but the game's own
+# main loop never resumed). Root cause: by the time a far-CALLed cave
+# starts running, its own return CS:IP (4 bytes, pushed by the far call
+# that reached it) sits ON TOP of the stack, above the `push ax` value
+# from 0x4F00 the original `pop ax` is meant to retrieve -- so replaying
+# `pop ax` inside the cave popped the cave's OWN return IP into AX
+# instead, then `retf` popped CS/the real pushed-AX value as if they were
+# IP/CS, jumping to a garbage address. Leaving `pop ax` as a live,
+# untouched byte in main *after* the far-call+nops (where the cave's own
+# retf has already restored the stack to normal before that byte ever
+# runs) sidesteps the whole problem -- same lesson as QUANTITY_EXIT_CAVE's
+# stray `add sp,4` bug, different instruction.
+BANNER_SET_CAVE = bytes.fromhex(
+    "8b169f42"    # mov dx,[0x429f]        (replayed)
+    "8b1ea142"    # mov bx,[0x42a1]        (replayed)
+    "c606ec4201"  # mov byte [0x42ec],1    (RTL flag on)
+    "cb"          # retf
+)
+BANNER_CLEAR_CAVE = bytes.fromhex(
+    "89169f42"    # mov [0x429f],dx        (replayed)
+    "891ea142"    # mov [0x42a1],bx        (replayed)
+    "c606ec4200"  # mov byte [0x42ec],0    (RTL flag off)
+    "cb"          # retf
+)
+
 CAVES = [
     ("pen_advance", PEN_ADVANCE_CAVE),
     ("set", SET_CAVE),
@@ -468,6 +524,11 @@ if ENABLE_QUANTITY_REVERSAL:
     CAVES += [
         ("qty_entry_mark", QTY_ENTRY_MARK_CAVE),
         ("quantity_exit", QUANTITY_EXIT_CAVE),
+    ]
+if ENABLE_MAP_BANNER_REVERSAL:
+    CAVES += [
+        ("banner_set", BANNER_SET_CAVE),
+        ("banner_clear", BANNER_CLEAR_CAVE),
     ]
 
 
@@ -552,6 +613,8 @@ def build_sites(tsr_offsets):
     qem = tsr_offsets.get("qty_entry_mark")
     ne = tsr_offsets.get("name_exit")
     qe = tsr_offsets.get("quantity_exit")
+    bs = tsr_offsets.get("banner_set")
+    bc = tsr_offsets.get("banner_clear")
 
     sites = []
 
@@ -681,6 +744,84 @@ def build_sites(tsr_offsets):
         sites.append(Site(
             "justify pre-adjust add->sub (RTL)",
             0x97B6, "011650FC", lambda: bytes.fromhex("291650FC"),
+        ))
+
+    # --- Map-destination-banner reveal (COMMAND1 line 76, "select a
+    # destination on the map") -- see ENABLE_MAP_BANNER_REVERSAL/
+    # BANNER_SET_CAVE/BANNER_CLEAR_CAVE above for the derivation. ---
+    if ENABLE_MAP_BANNER_REVERSAL:
+        # Starting pen X, in FUN_1000_4e71 (the callback's one-time setup):
+        # `mov word [0x429f], 0x55` (the box's LEFT edge) -> 0x9A (154), the
+        # exact X the OLD left-to-right reveal used to finish at (read live
+        # via dosbox-mcp: DS-relative [0x429f] once the old, LTR reveal had
+        # completed) -- i.e. the RTL text now occupies the SAME [0x55,0x9A]
+        # footprint the original English version always used, just walked
+        # in the opposite direction/order.
+        #
+        # A second attempt anchored to the header box's true right border
+        # instead (screen-measured constant 0xF1 = 241) so the text would
+        # hug the box edge properly -- live-tested and it DID look right on
+        # its own, but uncovered a real bug in a completely different
+        # system: the map screen's hover-name text (a sietch/location name,
+        # drawn by the ordinary, unrelated draw_command_menu_item path when
+        # hovering a grid cell) was NEVER an erase mechanism -- it only ever
+        # relied on new text overwriting old text at the SAME starting X.
+        # The original English default prompt and hover names both start
+        # from nearly the same left edge (0x55 vs draw_command_menu_item's
+        # own fixed 0x5D), so a shorter hover name still happened to
+        # overwrite most of the old prompt's glyphs as a side effect. Once
+        # our banner moved to the box's right edge, it no longer shares any
+        # footprint with where hover names draw, so whichever of our
+        # glyphs a given hover name's text doesn't reach far enough right
+        # to cover stayed on screen as an orphaned red fragment (confirmed
+        # live: a lone "ב" -- our first-drawn, now-rightmost letter --
+        # sitting to the right of a short hover name like "מדבר"). Fixing
+        # that properly needs an explicit clear-rect patch at the hover-
+        # transition site, which needs its own dedicated RE session (an
+        # unfamiliar generic blit primitive, not yet live-verified) --
+        # reverted to 0x9A instead, matching the original engine's own
+        # overwrite assumption exactly, zero new risk -- but user-tested
+        # and found too far left (text still hugs the box's left half).
+        # Compromise: 0xC6 (198), roughly centering the text's own midpoint
+        # in the header box rather than flush against either edge -- solved
+        # from the same screen-measured linear map (screen = 8.16 +
+        # 1.9275*engine) for the engine-X whose corresponding text span
+        # centers within the box's screen extent (146..499, center 322.5).
+        # Sits past 0x9A, so may reintroduce some hover-transition residue
+        # depending on hover-name width (see the clear-rect note above) --
+        # not yet re-verified live as of this comment.
+        sites.append(Site(
+            "map-banner start pen X (left edge -> centered in header box)",
+            0x4E89, "C7069F425500", lambda: bytes.fromhex("C7069F42C600"),
+        ))
+
+        # SET bracket, 0x4EEA: `mov dx,[0x429f]; mov bx,[0x42a1]` (8B) ->
+        # far call banner_set_cave + 3 nops (replays both, then raises the
+        # RTL flag). Left deliberately wide of the actual `call
+        # font_draw_glyph_func_small` at 0x4F01 -- the font_set_draw_
+        # position/font_select_small_font calls in between (0x4EF2/0x4EFD)
+        # don't touch the shared pen-advance primitive, so having the flag
+        # raised across them too is harmless, and it means neither of
+        # those CALL instructions ever needs replaying inside a cave living
+        # in a different segment (the TSR) -- see the cave derivation notes.
+        sites.append(Site(
+            "map-banner RTL flag set hook (frame-task callback pre-draw)",
+            0x4EEA, "8B169F428B1EA142",
+            (lambda o=bs: far_call(o) + b"\x90\x90\x90"),
+            poke_field_rel=3,
+        ))
+
+        # CLEAR bracket, 0x4F07: `mov [0x429f],dx; mov [0x42a1],bx` (8B) ->
+        # far call banner_clear_cave + 3 nops (replays both, then lowers the
+        # RTL flag) -- symmetric with the SET bracket above. Deliberately
+        # stops BEFORE the site's original trailing `pop ax` (0x4F0F, 1B),
+        # which is left untouched in main -- see BANNER_CLEAR_CAVE's
+        # comment for why replaying it inside the cave hung the game.
+        sites.append(Site(
+            "map-banner RTL flag clear hook (frame-task callback post-draw)",
+            0x4F07, "89169F42891EA142",
+            (lambda o=bc: far_call(o) + b"\x90\x90\x90"),
+            poke_field_rel=3,
         ))
 
     return sites
