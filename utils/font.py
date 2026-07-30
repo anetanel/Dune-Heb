@@ -33,18 +33,17 @@ col_red = (0xD0, 0xA0, 0xA0)
 col_green = (0xA0, 0xD0, 0xA0)
 
 
-class VerifyLoad(argparse.Action):
-    def __call__(self, parser, args, values, option_string=None):
-        if args.dump is not None:
-            parser.error('--load should not be used with --dump')
-        setattr(args, self.dest, values)
-
-
-class VerifyDump(argparse.Action):
-    def __call__(self, parser, args, values, option_string=None):
-        if args.load is not None:
-            parser.error('--dump should not be used with --load')
-        setattr(args, self.dest, values)
+def char_base(char):
+    """Byte offset into DUNECHAR data where a character's row bitmaps
+    start, and its glyph height. Char width tags (1 byte each) come
+    first for all CHAR_TABLE_CNT chars, then row bitmaps packed
+    back-to-back per char (9 rows for chars <128, 7 rows after)."""
+    is_upper = char < CHAR_UPP_TABLE_CNT
+    height = CHAR_UPP_HEIGHT if is_upper else CHAR_LOW_HEIGHT
+    base = CHAR_TABLE_CNT + \
+           min(char, CHAR_UPP_TABLE_CNT) * CHAR_UPP_HEIGHT + \
+           max(char - CHAR_UPP_TABLE_CNT, 0) * CHAR_LOW_HEIGHT
+    return base, height
 
 
 def dump(data, out_img):
@@ -87,7 +86,26 @@ def dump(data, out_img):
         base += height
 
 
+def dump_single(data, char):
+    width = min(data[char], 8)
+    base, height = char_base(char)
+
+    img = Image.new('RGB', (max(width, 1), height), 'white')
+    for y in range(0, height):
+        row = data[base + y]
+        for x in range(0, width):
+            if row & (0b10000000 >> x):
+                img.putpixel((x, y), col_black)
+
+    return img
+
+
 def load(data, img, pos, out_file):
+    # RGBA pixels never equal the RGB col_black tuple below, which would
+    # silently read every pixel as non-black and load a blank glyph.
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+
     if img.width == 0 or img.width > 8:
         sys.stderr.write("Wrong image width\n")
         return 1
@@ -110,13 +128,9 @@ def load(data, img, pos, out_file):
     # Write char width
     out_file.write(data[:pos] + bytes(data_width) + data[pos + 1:CHAR_TABLE_CNT])
 
-    base = CHAR_TABLE_CNT + \
-           min(pos, CHAR_UPP_TABLE_CNT) * CHAR_UPP_HEIGHT + \
-           max(pos - CHAR_UPP_TABLE_CNT, 0) * CHAR_LOW_HEIGHT
+    base, char_height = char_base(pos)
 
     data_font = []
-    char_height = CHAR_UPP_HEIGHT if pos < CHAR_UPP_TABLE_CNT else \
-        CHAR_LOW_HEIGHT
 
     # Encode character
     for y in range(0, char_height):
@@ -140,10 +154,11 @@ def load(data, img, pos, out_file):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('DUNECHAR', help='file extracted from DUNECHAR.HSQ (stdin default)', nargs='?')
-    parser.add_argument('--dump', help='dump DUNECHAR as image and print it to output', action=VerifyDump)
-    parser.add_argument('--load', help='load character raster image into new DUNECHAR file', action=VerifyLoad)
-    parser.add_argument('--position', help='specify character position in DUNECHAR (0-255) for image load', type=int,
-                        default=20)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--dump', help='dump DUNECHAR as image and print it to output (with --position, dumps only that one glyph instead of the whole table)', action='store_true')
+    group.add_argument('--load', help='load character raster image into new DUNECHAR file')
+    parser.add_argument('--position', help='character position in DUNECHAR (0-255): required target for --load (default 20), optional single-glyph selector for --dump (whole table if omitted)', type=int,
+                        default=None)
     parser.add_argument('--output', help='specify output file (stdout default)')
     args = parser.parse_args()
 
@@ -169,13 +184,20 @@ if __name__ == "__main__":
         out_file = sys.stdout.buffer
 
     if args.dump:
-        img = Image.new('RGB', (DUMP_WIDTH * DUMP_ROW_WIDTH,
-                                DUMP_HEIGHT * DUMP_ROW_HEIGHT), 'white')
-        dump(data, img)
+        if args.position is not None:
+            if args.position < 0 or args.position >= CHAR_TABLE_CNT:
+                sys.stderr.write("Wrong character position (out of table)\n")
+                sys.exit(1)
+            img = dump_single(data, args.position)
+        else:
+            img = Image.new('RGB', (DUMP_WIDTH * DUMP_ROW_WIDTH,
+                                    DUMP_HEIGHT * DUMP_ROW_HEIGHT), 'white')
+            dump(data, img)
         img.save(out_file, 'PNG')
     if args.load:
         img = Image.open(args.load)
-        load(data, img, args.position, out_file)
+        pos = args.position if args.position is not None else 20
+        load(data, img, pos, out_file)
 
     if args.output:
         out_file.close()

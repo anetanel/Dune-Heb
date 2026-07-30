@@ -68,13 +68,21 @@ static path.
 - `utils/build_translation.py` is the only place that should touch
   `org_files/` or copy into `game/`. Don't add ad-hoc copy logic to other
   scripts.
-- `utils/font.py`'s `--dump` flag requires a value, but that value is only
-  used to check for conflicts with `--load` — the actual glyph-table bytes
-  to render come from the positional input file argument (e.g.
-  `./utils/font.py <input.bin> --dump x --output out.png`). Don't pass the
-  input file as `--dump`'s value; it'll silently read an empty buffer.
+- `utils/font.py`'s `--dump` is a boolean flag (`--dump`/`--load` are a
+  mutually exclusive group) — the glyph-table bytes to render come from
+  the positional input file argument, not from `--dump` itself, e.g.
+  `./utils/font.py <input.bin> --dump --output out.png`.
   `build_translation.py`'s font step uses this to render
   `tmp/DUNECHAR_before.png`/`tmp/DUNECHAR_after.png` for a visual diff.
+  Add `--position N` to dump just glyph `N` at its native size instead of the
+  whole table, e.g. `./utils/font.py tmp/DUNECHAR.BIN --dump --position
+  173 --output glyph.png`. Char index is a byte offset into DUNECHAR, not
+  ASCII directly, though the two tables happen to line up with ASCII in
+  places: 0-127 is the "upper"/big font (height 9) with Hebrew letters
+  slotted into 65-91 in place of `A`-`[`; 128-255 is the "lower"/small font
+  (height 7) and mirrors ASCII 0-127 at a +128 offset for punctuation/digits
+  (e.g. small-font `-` is 173 = ord('-') + 128) — don't assume that mapping
+  holds outside the verified punctuation/digit range.
 - `utils/hsq.py` and `utils/tu.py` are pure-Python ports of the upstream
   `Dune-game-translations` C tools (`utils/hsq.c`, `utils/tu.c`, still kept
   in the repo for reference alongside the `Makefile`, but no longer built or

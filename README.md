@@ -133,14 +133,18 @@ glyphs) so you can visually diff the two.
 
 To render either glyph table PNG by hand from a `.BIN` font file:
 ```
-./utils/font.py <input.bin> --dump x --output out.png
+./utils/font.py <input.bin> --dump --output out.png
 ```
-`--dump` requires a value but the value itself is unused (only checked for
-conflicts with `--load`) — the file to render comes from the positional
-argument. For example, to render the original (unmodified) glyph table:
+The file to render comes from the positional argument, not from `--dump`
+itself. For example, to render the original (unmodified) glyph table:
 ```
 ./utils/hsq.py -d org_files/DUNECHAR.HSQ -o /tmp/DUNECHAR.BIN
-./utils/font.py /tmp/DUNECHAR.BIN --dump x --output /tmp/before.png
+./utils/font.py /tmp/DUNECHAR.BIN --dump --output /tmp/before.png
+```
+Add `--position N` to dump just glyph `N` at its native size instead of the
+whole table:
+```
+./utils/font.py /tmp/DUNECHAR.BIN --dump --position 173 --output /tmp/dash.png
 ```
 
 ## The intro title card
