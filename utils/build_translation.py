@@ -338,7 +338,7 @@ def ensure_english_txt(name):
 # should read first (top) after the M and the closing sentence (bottom)
 # before it.
 COMMAND1_NATURAL_LINES = (
-    set(range(267, 275)) | {73, 74, 76, 175, 180} | {230, 231, 232, 233, 234, 235, 237, 244, 245}
+    set(range(267, 275)) | {73, 74, 76} | set(range(175, 181)) | {230, 231, 232, 233, 234, 235, 237, 244, 245}
 )
 
 
