@@ -249,6 +249,28 @@ possible at all:
   → locate Harkonnen forts via espionage → attack via the map → win by
   taking every Harkonnen fort.
 
+## Reverse-engineering: keep dune-floppy-disasm in sync
+
+`/home/netanel/repos/dune-floppy-disasm` is a sibling project (split out
+from this repo) aiming for a fully annotated floppy `DUNEPRG.EXE` — every
+one of the 807 disassembled procedures understood and named, working
+toward an eventual clean-room reimplementation. It tracks hand-derived
+addresses, data variables, and function behavior in `KNOWN_ADDRESSES.md`,
+cross-referenced against the CD build's already-named disassembly and
+OpenRakis's unannotated floppy IDA export. Per that repo's own README,
+this repo's patch scripts (`patch_rtl_engine.py`,
+`patch_location_name_order.py`) and session history are already one of
+its primary sources for hand-derived floppy addresses.
+
+Whenever work here involves reverse-engineering `DUNEPRG.EXE` — finding
+or confirming a function's address and real behavior, working out what a
+register or data variable actually holds, anything learned via live
+`dosbox-mcp` tracing or Ghidra, not just writing the patch that uses that
+finding — consider whether it belongs in dune-floppy-disasm too (typically
+a `KNOWN_ADDRESSES.md` addition/correction). Don't let a bug fix here
+quietly discover new floppy-binary facts that never make it into the
+project meant to accumulate them.
+
 ## Boundaries
 
 - Treat any editorial decision about the translated text itself (word
