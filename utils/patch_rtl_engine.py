@@ -193,6 +193,54 @@ ENABLE_QUANTITY_REVERSAL = True
 # callback's own SET/CLEAR bracket points, same as draw_subtitle_body's.
 ENABLE_MAP_BANNER_REVERSAL = True
 
+# Sietch-info panel's water-quantity row (map screen, click a sietch with a
+# wind-trap): the panel calls location_0605c (floppy load offset 0x6DFC,
+# confirmed against a pre-existing Ghidra project for this exact EXE, whose
+# function names -- draw_location_name, location_0605c, etc. -- already
+# matched madmoose/dune-chani's CD-build naming from earlier sessions in
+# this repo), which unconditionally draws the "water:" label
+# (font_draw_phrase_or_command_string_with_color_at_pos, "cbf8") THEN draws
+# the raw 3-digit quantity (a separate routine, "dda1", with no position
+# argument of its own -- it just continues from wherever the label call
+# left the shared pen position). Both draws run through the ordinary LTR
+# glyph path (pen += glyph width every time, unconditionally) -- this
+# call site is never routed through the [0x42EC]-gated RTL pen mechanism
+# the rest of this file installs for dialogue/map-banner text, so it was
+# never a candidate for the flip-the-flag fix used elsewhere.
+#
+# This is NOT a translation-content bug (see feedback_prefer_content_fix_
+# over_engine_patch): the label's own reversed content ("מים:" -> stored
+# ":מים", colon-then-word) already renders correctly R-to-L on its own:
+# the actual defect is that the quantity is a SEPARATE draw call that
+# always lands to the right of wherever the label finished, regardless of
+# the label's own internal byte order -- no content change can move a
+# call that always continues rightward from the END of a preceding draw
+# to instead land to its LEFT. Confirmed by simulating every reordering
+# of the label's own bytes: the number's absolute start position is always
+# label_base_x + label_total_width, independent of internal arrangement.
+#
+# Fix: reorder the two draws (digits first, then label continuing after
+# them) so the natural RTL reading "מים: 149" (word, colon, number) comes
+# out right, instead of the shipped "water:"+"149" glued together with the
+# number stuck mid-word. Digits can't simply swap position with the label
+# in-place (30 extra bytes needed, no slack in location_0605c's fixed
+# 80-byte slot) so the whole routine is reimplemented in a cave instead,
+# reached by converting its one call site (in location_0605c's caller, at
+# load offset 0x6DF1: `push ax / call location_0605c / pop ax`, 5 bytes)
+# into a far call -- the exact same technique used throughout this file,
+# just with more internal far-calls back into main (font_select_small_font
+# @ 0xCAD8, font_set_draw_position @ 0xCAB1 -- needed here because "dda1"
+# has no position argument of its own, unlike the label's all-in-one draw
+# call -- the digit routine @ 0xDDA1, font_draw_phrase_or_command_string_
+# with_color_at_pos @ 0xCBF8 [used three times: has-water label, no-water
+# label, and the "No wind-trap" line], and the Equipment-header draw @
+# 0x6F1A). Hand-assembled and round-tripped through nasm/ndisasm exactly
+# like every other cave in this file, then cross-checked in Python (this
+# comment's numbers match WATER_ROW_CAVE_FARCALL_OFFSETS, not hand-counted
+# against the disassembly -- see the builder script this was derived from
+# for the offset arithmetic).
+ENABLE_WATER_ROW_REVERSAL = True
+
 # ---------------------------------------------------------------------------
 # Cave blob: independent little routines the in-place far calls jump to.
 # Offsets within the blob are computed after their bytes are known.
@@ -510,6 +558,252 @@ BANNER_CLEAR_CAVE = bytes.fromhex(
     "cb"          # retf
 )
 
+# --- Sietch-info water-row reorder cave ---
+#
+# Reimplements location_0605c's has-water/no-water branch from scratch,
+# reordered so the quantity draws BEFORE the label instead of after (see
+# ENABLE_WATER_ROW_REVERSAL above for the full derivation). Replaces the
+# original routine's one call site (a near call wrapped in push ax/pop ax
+# at the caller) with a far call into this cave -- see WATER_ROW_SITE_ORIG
+# below.
+#
+# THREE EARLIER VERSIONS OF THIS CAVE WERE WRONG -- all live-confirmed
+# broken (dosbox-mcp), each fixed by tracing/re-simulating instead of
+# guessing again, per [[feedback_disassembly_over_blackbox_testing]]:
+#
+# v1 far-called cad8/cab1/dda1/cbf8/6f1a directly. A far call pushes a
+# 4-byte CS:IP return address, but every one of those functions ends in a
+# plain near `ret` (2 bytes) -- they're near-called from elsewhere in main
+# and know nothing about this cave. The near `ret` only pops the IP,
+# leaving the far call's pushed CS on the stack; execution resumes at the
+# right offset under the WRONG segment (main's, unchanged by a near ret,
+# instead of the cave's TSR segment) -- i.e. jumps into main at a small
+# numeric offset that's really a cave-relative address, garbage code.
+# Symptom: game faded to black and rendered intro dialogue text on the
+# first sietch click.
+#
+# v2 fixed the segment problem with a generic `call si ; retf` trampoline
+# living in main (SI holding the real target address, chosen because none
+# of the 5 targets seemed to read it as input) but missed two more bugs,
+# found by re-simulating the whole routine by hand instead of guessing a
+# third live test blind:
+#   1. cbf8 (font_draw_phrase_or_command_string_with_color_at_pos)
+#      internally reseeds the pen from its own dx/bx arguments every time
+#      it's called (it calls font_set_draw_position(dx,bx) itself) -- so
+#      after dda1 draws the digits and advances the pen, dx/bx still held
+#      the STALE pre-digit base position, and calling cbf8 for the label
+#      reset the pen right back to it instead of continuing after the
+#      digits. Needed an explicit font_get_draw_position call in between
+#      to refresh dx/bx first.
+#   2. FUN_1000_6f1a -- assumed to be a simple "Equipment:" label draw
+#      like the others -- is actually a sprite-layout loop
+#      (`draw_sprite_clobbering_bx_dx` in a loop) that reads a real
+#      equipment-list pointer out of ES:SI. The mysterious "mov si,0x75"
+#      the original code executes (and, oddly, never restores after
+#      pushing it for dda1) turns out to be exactly this: SI must still
+#      equal 0x75 when 6f1a runs. v2's SI-as-call-target trampoline
+#      clobbered SI for every single one of the 7 cave->main calls,
+#      including the one immediately before 6f1a itself -- so 6f1a read
+#      its equipment pointer from ES:[6f1a-ish garbage] instead of
+#      ES:[0x75] and blitted garbage sprites in a loop. Symptom: game kept
+#      running (no crash) but the screen filled with visual noise on
+#      sietch click -- the CPU never jumped anywhere invalid, it was
+#      dutifully executing a sprite-blit loop with corrupted parameters.
+#
+# v3 sidesteps the whole "which register can the cave borrow" problem:
+# location_0605c's own 80-byte body (load offset 0x6DFC-0x6E4C) is now
+# dead code -- its one caller was redirected to this cave, and a whole-
+# file xref scan confirms nothing else jumps into it (not even the has-
+# water/no-water branch's internal `jz`, which is self-contained) -- so
+# it's repurposed to hold 6 tiny dedicated trampolines, one per target,
+# each just `call near <target> ; retf` (E8 rel16 ; CB, 4 bytes, baked-in
+# target, no register involved at all): WATER_ROW_TRAMPOLINES_NEW below,
+# addresses in WATER_ROW_TRAMP (computed by the same builder script that
+# produced this hex, verified with a full ndisasm round-trip -- not hand-
+# counted). The cave itself does a plain `far call <trampoline address>`
+# for each logical call (segment placeholder poked with cave_seg_raw, same
+# convention as every other far-call site here); WATER_ROW_CAVE_FARCALL_
+# OFFSETS are those placeholders' byte offsets within the cave. Since
+# nothing borrows any register to reach a trampoline, SI is set exactly
+# once, at its original position, and never touched again -- it reaches
+# the 6f1a call with the same 0x75 the original code always had there.
+# v3 was live-confirmed to fix the segment and pen-reseed bugs (repeatedly
+# hovering/toggling a sietch's water row no longer corrupted the screen)
+# but still failed on the very first actual sietch-info-panel open: still
+# noise.
+#
+# v3's remaining bug, found the same way (re-simulating the whole routine
+# register-by-register rather than another live guess): FUN_1000_6f1a's
+# own preamble calls 0xC0EC (`LES SI,[0xfdee]` then `mov bx,ax; shl bx,1;
+# add si,[bx+si]`) -- SI was never the input that mattered; **AX** is,
+# used as a doubled table index to compute 6f1a's real ES:SI resource
+# pointer. In the ORIGINAL code, AX going into 6f1a is whatever survived
+# the has-water branch's own `push ax`/`pop ax` bracket around dda1 --
+# i.e. the water quantity byte itself (loaded once, well before dda1, and
+# never touched again until 6f1a). This cave's v1-v3 reordering set
+# `ax=0x62` for the label draw AFTER dda1 and never restored it before
+# calling 6f1a, so 6f1a computed its resource pointer from a wild index
+# (whatever cbf8 happened to leave in ax) instead of the water quantity --
+# a second, independent way to get the exact same "garbage sprite-blit
+# loop fills the screen with noise" symptom as v2's SI bug, this time
+# surviving all the way to an actual mouse click on the sietch (v2's SI
+# bug was already caught by mere hover/toggle, since draw_phrase runs on
+# every hover; 6f1a apparently only runs once the info panel actually
+# opens).
+#
+# v4 re-loaded the water quantity fresh from the location struct
+# (`al=[di+0x1b]`) and zeroed ah immediately before the 6f1a call, on the
+# theory that ax=water_quantity was what the original code passed. WRONG,
+# also live-confirmed (dosbox-mcp): a sietch click still filled the screen
+# with noise.
+#
+# v4's mistake: hand-tracing the original's `push cx / push ax / push si /
+# call dda1 / pop ax / pop cx` as if it were a clean save-restore. It
+# isn't -- popping only 2 of the 3 pushed values in LIFO order means `pop
+# ax` actually retrieves the pushed SI value (0x75) and `pop cx` retrieves
+# the pushed AX value (the water byte), leaving the *original* cx sitting
+# on the stack until the later `pop bx / pop cx` (after 6f1a) finally
+# retrieves it back and rebalances the stack. Confirmed by setting
+# ENABLE_WATER_ROW_REVERSAL = False, rebuilding, and breaking live
+# (dosbox-mcp) at the ORIGINAL, unpatched 6f1a call site on a real sietch
+# with water (144): registers read ax=0x75, cx=0x90 (=144) right before
+# the call -- i.e. ax ends up holding SI's own constant, and cx ends up
+# holding the water quantity, exactly backwards from v4's assumption and
+# from what either register held earlier in the function.
+#
+# v5 replicates that exact live-observed shuffle directly instead of re-
+# deriving it by hand a third time: `cl = [di+0x1b]` (water quantity),
+# `ch = 0`, `ax = 0x75`, right before the 6f1a call. Live-confirmed
+# (dosbox-mcp) fixed: a sietch's info panel now opens showing the correct
+# "<water>: <label>" layout and a real equipment icon instead of noise.
+#
+# v6 fixed a cosmetic issue spotted once v5 finally rendered the real
+# panel: the water quantity digits render in a different colour than the
+# "water:" label. Root cause: every glyph draw (both the label's and the
+# digits') ultimately reads its colour from a shared variable, [0xfe17] --
+# but only cbf8 (the label draw) ever WRITES it (`mov [0xfe17],cx`, the
+# first thing it does). In the original ordering the label always drew
+# first, so [0xfe17] was always freshly set before any digit glyph
+# rendered; in this reordering the digits draw first, before cbf8 has ever
+# run this call, so they inherited whatever [0xfe17] was last left as by a
+# completely unrelated earlier draw (observed: consistently white). Fix:
+# write the same cx cbf8 would use into [0xfe17] explicitly, right after
+# `mov cl,6`, before anything draws.
+#
+# v6 was live-confirmed (dosbox-mcp, pixel-sampled) to fix digits-vs-label
+# consistency *within* one sietch's panel -- but the user then reported
+# the label's colour still drifting *between* different sietches, which
+# v6 didn't touch. Root cause, found by breaking at both the digit-draw
+# and label-draw call sites and reading [0xfe17]/cx directly rather than
+# hand-tracing a fourth time: the same `push cx,ax,si / pop ax,pop cx`
+# mismatched-pop dance already identified in v4/v5 (see above) doesn't
+# just affect ax going into 6f1a -- by the time execution reaches the
+# label draw, `pop cx` has *also* overwritten the live cx register with
+# the pushed ax value, i.e. the water quantity byte, not the color v6 had
+# just written to [0xfe17]. cbf8 then unconditionally does `mov
+# [0xfe17],cx` using that corrupted cx -- so the label's colour ends up
+# being driven by the water quantity NUMBER itself, which obviously
+# differs sietch to sietch. (The digits render correctly and consistently
+# because they draw *before* this corruption happens, using the still-
+# correct [0xfe17] v6 set moments earlier.)
+#
+# v7 (current) reloads cx from [0xfe17] itself (still holding the correct
+# colour, untouched since the preamble wrote it) immediately before the
+# label draw, undoing the pop dance's side effect on cx for this one
+# purpose without disturbing it for the 6f1a fix that relies on the same
+# dance later.
+#
+#   50                          push ax        (replays the call site's own displaced instruction)
+#   9A FC6D 0000                 call far trampoline[select_font]  (-> font_select_small_font)
+#   B1 06                         mov cl,6
+#   89 0E 17FE                    mov [0xfe17],cx   (v6 fix -- see above)
+#   83 C3 0A                      add bx,0xa
+#   8B 16 9116                    mov dx,[0x1691]
+#   83 C2 04                      add dx,4
+#   8A 45 1B                      mov al,[di+0x1b]      (water quantity byte)
+#   BE 75 00                      mov si,0x75    (original position, never touched again below)
+#   BD 63 00                      mov bp,0x63
+#   F6 45 0A 20                   test byte [di+0xa],0x20
+#   74 34                         jz NOWATER
+#   -- HAS WATER --
+#   9A 006E 0000                   call far trampoline[set_pos]   (-> font_set_draw_position(dx,bx) --
+#                                                                    dda1 has no position arg of its own)
+#   51 / 50 / 56                    push cx / push ax / push si
+#   9A 086E 0000                     call far trampoline[digit_draw]   (-> draw the 3-digit quantity)
+#   58 / 59                           pop ax / pop cx
+#   9A 046E 0000                       call far trampoline[get_pos]   (-> refresh dx,bx from the pen's
+#                                                                        CURRENT post-digit position --
+#                                                                        cbf8 below reseeds from these)
+#   8B 0E 17FE                           mov cx,[0xfe17]   (v7 fix -- see above; undoes the pop-dance's
+#                                                            corruption of cx before cbf8 reads it)
+#   B8 6200                              mov ax,0x62
+#   9A 0C6E 0000                          call far trampoline[draw_phrase]   (-> "water:" label,
+#                                                                              continuing after the digits)
+#   83 C3 07                               add bx,7
+#   8B 16 9116                              mov dx,[0x1691]
+#   83 C2 04                                 add dx,4
+#   8B 2E 9516                                mov bp,[0x1695]
+#   53                                         push bx
+#   8A 4D 1B                                    mov cl,[di+0x1b]   (water quantity -- see v5 fix
+#                                                                    above; live-observed cx/ax
+#                                                                    values, not hand-traced)
+#   30 ED                                        xor ch,ch
+#   B8 7500                                      mov ax,0x75
+#   9A 106E 0000                                 call far trampoline[equip_row]   (-> equipment sprite row)
+#   5B / 59                                     pop bx / pop cx
+#   EB 19                                        jmp DONE
+#   -- NOWATER --
+#   B8 6200                       mov ax,0x62
+#   9A 0C6E 0000                   call far trampoline[draw_phrase]   (-> "water:" label alone)
+#   8B C5                           mov ax,bp
+#   83 C3 07                         add bx,7
+#   8B 16 9116                        mov dx,[0x1691]
+#   83 C2 0A                           add dx,0xa
+#   9A 0C6E 0000                        call far trampoline[draw_phrase]   (-> "No wind-trap" line)
+#   -- DONE --
+#   58                       pop ax   (replays the call site's own displaced instruction)
+#   CB                        retf
+WATER_ROW_CAVE = bytes.fromhex(
+    "509afc6d0000b106890e17fe83c30a8b16911683c2048a451bbe7500bd6300"
+    "f6450a2074409a006e00005150569a086e000058599a046e00008b0e17feb8"
+    "62009a0c6e000083c3078b16911683c2048b2e9516538a4d1b30edb875009a"
+    "106e00005b59eb19b862009a0c6e00008bc583c3078b16911683c20a9a0c6e"
+    "000058cb"
+)
+WATER_ROW_CAVE_FARCALL_OFFSETS = [4, 40, 48, 55, 67, 95, 107, 124]
+
+# The call site this cave replaces: location_0605c's caller (load offset
+# 0x6DF1) does `push ax / call location_0605c / pop ax` (5 bytes) -- the
+# push/pop are folded into the cave (replayed as its first/last
+# instructions above) so the whole 5-byte span becomes far_call(cave_off),
+# an exact-length swap using the same helper every other far-call site here
+# uses.
+WATER_ROW_SITE_OFFSET = 0x6DF1
+WATER_ROW_SITE_ORIG = "50E8070058"
+
+# location_0605c's own now-dead 80-byte body (load offset 0x6DFC-0x6E4C) --
+# repurposed to hold the 6 dedicated near-call trampolines described above.
+# Only the first 24 bytes are used; the remaining 56 are NOPed out (dead,
+# but harmless-if-ever-reached rather than leftover live opcodes).
+WATER_ROW_TRAMP = {
+    "select_font": 0x6DFC,
+    "set_pos": 0x6E00,
+    "get_pos": 0x6E04,
+    "digit_draw": 0x6E08,
+    "draw_phrase": 0x6E0C,
+    "equip_row": 0x6E10,
+}
+WATER_ROW_TRAMPOLINES_OFFSET = 0x6DFC
+WATER_ROW_TRAMPOLINES_ORIG = (
+    "e8d95cb10683c30a8b16911683c204b86200e8e75d8a451bbe7500bd6300f645"
+    "0a20741d515056e87b6f585983c3078b16911683c2048b2e951653e8e0005b59"
+    "c38bc583c3078b16911683c20ae9ac5d"
+)
+WATER_ROW_TRAMPOLINES_NEW = (
+    "e8d95ccbe8ae5ccbe8bb5ccbe8966fcbe8e95dcbe80701cb"
+    + "90" * (len(WATER_ROW_TRAMPOLINES_ORIG) // 2 - 24)
+)
+
 CAVES = [
     ("pen_advance", PEN_ADVANCE_CAVE),
     ("set", SET_CAVE),
@@ -529,6 +823,10 @@ if ENABLE_MAP_BANNER_REVERSAL:
     CAVES += [
         ("banner_set", BANNER_SET_CAVE),
         ("banner_clear", BANNER_CLEAR_CAVE),
+    ]
+if ENABLE_WATER_ROW_REVERSAL:
+    CAVES += [
+        ("water_row", WATER_ROW_CAVE),
     ]
 
 
@@ -615,6 +913,7 @@ def build_sites(tsr_offsets):
     qe = tsr_offsets.get("quantity_exit")
     bs = tsr_offsets.get("banner_set")
     bc = tsr_offsets.get("banner_clear")
+    wr = tsr_offsets.get("water_row")
 
     sites = []
 
@@ -824,6 +1123,22 @@ def build_sites(tsr_offsets):
             poke_field_rel=3,
         ))
 
+    # --- Sietch-info water-row reorder (digits drawn before the label
+    # instead of after) -- see ENABLE_WATER_ROW_REVERSAL/WATER_ROW_CAVE
+    # above for the full derivation. ---
+    if ENABLE_WATER_ROW_REVERSAL:
+        sites.append(Site(
+            "water-row dedicated near-call trampolines (location_0605c's dead body, repurposed)",
+            WATER_ROW_TRAMPOLINES_OFFSET, WATER_ROW_TRAMPOLINES_ORIG,
+            (lambda: bytes.fromhex(WATER_ROW_TRAMPOLINES_NEW)),
+        ))
+        sites.append(Site(
+            "sietch-info water-row call site -> far call cave (digits before label)",
+            WATER_ROW_SITE_OFFSET, WATER_ROW_SITE_ORIG,
+            (lambda o=wr: far_call(o)),
+            poke_field_rel=3,
+        ))
+
     return sites
 
 
@@ -973,6 +1288,9 @@ def apply_patches(exe_path):
         farjmp_local_offsets.append(tsr_offsets["name_exit"] + NAME_EXIT_FARJMP_LOCAL_OFF)
     if ENABLE_QUANTITY_REVERSAL:
         farjmp_local_offsets.append(tsr_offsets["quantity_exit"] + QUANTITY_EXIT_FARJMP_LOCAL_OFF)
+    if ENABLE_WATER_ROW_REVERSAL:
+        farjmp_local_offsets.extend(
+            tsr_offsets["water_row"] + off for off in WATER_ROW_CAVE_FARCALL_OFFSETS)
     stub = build_stub(cave_seg_raw, site_load_offsets, farjmp_local_offsets)
 
     data.extend(b"\x00" * pad_len)
