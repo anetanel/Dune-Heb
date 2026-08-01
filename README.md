@@ -46,7 +46,7 @@ licensed CC0 1.0 Universal (see `fonts/PublicPixel-LICENSE-CC0.txt`).
 | `final_png/` | Hand-authored Hebrew artwork for `FINAL.HSQ`'s two outro title/caption sprites — see "The outro credit screens" below | yes |
 | `fonts/` | Third-party font files used to render non-DUNECHAR graphics (the intro title card and, as a fallback when a letter has no hand-edited `generic_png/` file, the outro credit-name sprites) | yes |
 | `assets/` | Other source images spliced into game graphics (currently just the intro credits' logo badge) | yes |
-| `utils/` | All scripts and tools: `build_translation.py`, `translate_phrase.py`, `heb_encode.py`, `load_heb_font.sh`, plus `hsq.py` (compress/decompress), `tu.py` (pack/unpack phrase binaries), `font.py`, `split.py`, `bigs_sprite.py`, `verify_bigs_sprite_roundtrip.py`, `patch_intro_title.py`, `patch_intro_logo.py`, `patch_generic_letters.py`, `patch_final_credits.py`, `extract_sprites.py` | yes |
+| `utils/` | All scripts and tools — see "Scripts" below for the full list | yes |
 | `org_files/` | Unmodified original files, verified by checksum: the seven `.HSQ` files this pipeline replaces, plus `DUNEPRG.EXE` (patched in place rather than replaced, so it needs its own pristine reference too) | **no** (gitignored) |
 | `game/` | Your copy of the full game install; also the final install target | **no** (gitignored) |
 | `build/` | Final translated `.HSQ` outputs, ready to install | yes |
@@ -109,6 +109,29 @@ already present. Output lands in `build/<NAME>.HSQ`; run `utils/build_translatio
 afterward to install it into `game/`.
 
 ## How a build is assembled
+
+`./utils/build_translation.py` runs these steps in order every time
+(numbers match its own `[N/11]` progress output):
+
+1. verify/repair `org_files/` from `game/` by content hash
+2. build the Hebrew font into `build/DUNECHAR.HSQ` (skipped on later runs
+   unless `--rebuild-font`) — see the diagram below
+3. build every translated phrase/command file — see the diagram below
+4. regenerate the intro title card into `build/INTDS.HSQ` — see
+   "The intro title card"
+5. regenerate the outro's letter sprites into `build/GENERIC.HSQ` — see
+   "The outro credit screens"
+6. regenerate the outro's title/caption sprites into `build/FINAL.HSQ` —
+   see "The outro credit screens"
+7. install everything from `build/` into `game/`
+8. reset `game/DUNEPRG.EXE` from the hash-verified `org_files/` copy —
+   see "Patching game/DUNEPRG.EXE"
+9. patch `game/DUNEPRG.EXE`'s map/globe location-name draw order — see
+   "Patching game/DUNEPRG.EXE"
+10. patch `game/DUNEPRG.EXE` for native RTL dialogue rendering — see
+    "Patching game/DUNEPRG.EXE"
+11. make sure `game/DUNE.BAT` launches the RTL cave TSR — see
+    "Patching game/DUNEPRG.EXE"
 
 ```
 org_files/<NAME>.HSQ
@@ -252,6 +275,75 @@ that's actually pinned down, not just a `GENERIC.HSQ`-specific quirk.
 on `bigs_sprite.py`'s own encode/decode round-trip (both paths, several
 real sprite files) — run it after touching that module.
 
+## Patching game/DUNEPRG.EXE
+
+Two things can't be fixed by editing translation content at all — they're
+governed by fixed engine code that decides in what *order* separately-drawn
+pieces of text land on screen, independent of any string's own bytes.
+Everything above regenerates `.HSQ` data files; the scripts below instead
+patch the game executable itself, in place.
+
+**`utils/patch_location_name_order.py`** fixes the map/globe screen's
+two-part location labels (e.g. "Sietch: " + "area-site name"), which
+`draw_location_name` always draws in a fixed left-to-right field order and
+which two of its four call sites always draw immediately after a type
+label with no engine-inserted gap — both correct for English, backwards
+for Hebrew. It patches the field order and, at just those two call sites,
+swaps which draws first (name, then label) so RTL Hebrew reads naturally.
+
+**`utils/patch_rtl_engine.py`** (**EXPERIMENTAL**) makes the
+dialogue/subtitle system (`draw_subtitle_body`, used for spoken
+`PHRASE11`/`PHRASE12` text) render Hebrew natively right-to-left, so the
+engine's own runtime word-wrap handles natural, un-pre-reversed content
+instead of requiring pre-wrapped/pre-reversed text. It repurposes a dead
+game-data byte as a per-line "currently drawing RTL subtitle text" flag
+and flips the glyph/space pen-advance direction while it's set. Built on
+top of that same flag, it also fixes:
+- name-token and quantity-token substitution order in dialogue text
+- the ornithopter destination-map screen's default-prompt banner reveal
+  (a separate draw path with its own hardcoded left-edge start)
+- the sietch water-quantity row on the map screen (label and quantity are
+  two independent draw calls with no RTL awareness between them)
+
+Each of these is its own toggle (`ENABLE_NAME_REVERSAL`,
+`ENABLE_QUANTITY_REVERSAL`, `ENABLE_MAP_BANNER_REVERSAL`,
+`ENABLE_WATER_ROW_REVERSAL`) in the script, all enabled by default.
+
+This patch's code ("cave") can't simply be appended to `DUNEPRG.EXE`'s own
+file — that was tried twice and confirmed live (dosbox-mcp) to eventually
+get overwritten by the game's own runtime resource loader, a bump
+allocator that claims scratch space within the process's own memory block
+without asking DOS what's free. **`utils/rtl_cave_tsr.py`** solves this by
+building `DUNETSR.COM`, a small DOS TSR (terminate-and-stay-resident
+program) that holds the cave in its own, separately DOS-owned memory
+block instead — safe from the game's allocator because DOS's own memory
+manager respects block ownership even though the game's internal one
+doesn't. The TSR must go resident *before* `DUNEPRG.EXE` runs, which is
+why the pipeline's last step patches `game/DUNE.BAT` to `LH DUNETSR` (load
+high, freeing conventional memory when upper memory blocks are available)
+ahead of the game launch line.
+
+Both EXE-patching scripts back up the pristine file to
+`<name>.orig-backup` next to it in `game/` before their first write, and
+`build_translation.py` always resets `game/DUNEPRG.EXE` from the
+hash-verified `org_files/` copy before patching on *every* run — the EXE
+is patched in place rather than rebuilt from scratch each time, so without
+that reset, a patch removed from the codebase in a later commit could
+silently keep surviving in an existing `game/` install.
+
+There's also an experimental, currently-blocked CD-build port,
+**`utils/patch_rtl_engine_cd.py`**, targeting `DNCDPRG.EXE` from the Cryo
+Dune 3.7 CD release instead of the floppy build this repo otherwise
+targets exclusively. It boots and plays the intro without crashing but
+the RTL rendering never engages — the CD build's runtime allocator isn't
+bounded the way the floppy build's is, so it overwrites the cave before
+the first subtitle draws. Not wired into `build_translation.py`; see the
+script's own docstring if picking this back up.
+
+**`utils/restore_original.py`** copies the unmodified originals from
+`org_files/` back into `game/`, undoing the translation install so the
+game can be run with the original English files again.
+
 ## Scripts
 
 All scripts live in `utils/`.
@@ -270,6 +362,12 @@ All scripts live in `utils/`.
 - **`utils/patch_generic_letters.py`** — regenerates the outro's `GENERIC.HSQ` credit-name letter sprites (33-58) and geresh mark (7); see "The outro credit screens" above. `--dump-pngs` (re)writes `generic_png/`'s hand-editable source from the current font render.
 - **`utils/patch_final_credits.py`** — regenerates `FINAL.HSQ`'s "THE END" (sprite 4) and "with (in order of Appearance)" (sprite 5) picture sprites from hand-authored `final_png/` artwork; see "The outro credit screens" above.
 - **`utils/extract_sprites.py`** — dumps every sprite from every `game/*.HSQ` file that uses the picture-resource format as individually named PNGs (`tmp/sprites/<NAME>/<index>_<w>x<h>.png`), for browsing the game's art assets. Skips files in other formats (text tables, font table, sound/music data, a few unidentified containers) and lists them in `tmp/sprites/EXTRACTION_REPORT.txt` along with why. Read-only — never touches `org_files/`, `translations/`, or `game/`.
+- **`utils/patch_location_name_order.py`** — fixes the map/globe screen's location-label draw order in `game/DUNEPRG.EXE`; see "Patching game/DUNEPRG.EXE" above.
+- **`utils/patch_rtl_engine.py`** — **EXPERIMENTAL**; makes dialogue/subtitle text render natively RTL in `game/DUNEPRG.EXE`, plus name/quantity-token, map-banner, and water-row RTL fixes; see "Patching game/DUNEPRG.EXE" above.
+- **`utils/rtl_cave_tsr.py`** — builds `DUNETSR.COM`, the TSR that holds `patch_rtl_engine.py`'s patch code in its own DOS-owned memory block; see "Patching game/DUNEPRG.EXE" above. Not run directly — called by `patch_rtl_engine.py`.
+- **`utils/patch_rtl_engine_cd.py`** — **EXPERIMENTAL, currently blocked**; a CD-build (`DNCDPRG.EXE`) port of `patch_rtl_engine.py`'s RTL rendering patch. Not wired into `build_translation.py`; see "Patching game/DUNEPRG.EXE" above.
+- **`utils/restore_original.py`** — copies `org_files/` back into `game/`, undoing the translation install.
+- **`utils/package_dune_zip.py`** — zips `game/` into `DUNE.zip` at the repo root (under a top-level `DUNE/` folder), excluding save files, backups, and repo bookkeeping files — for sharing/distributing a built install. Regenerate on demand; not committed (gitignored).
 - **`utils/run_dune.sh`** — launches the game under DOSBox-X for visual QA; see below.
 - **`utils/setup_dosbox_mcp.sh`** — one-shot bootstrap for the DOSBox-X + dosbox-mcp dev toolchain on a fresh machine; see "Setting up DOSBox-X" below.
 
