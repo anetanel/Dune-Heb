@@ -23,7 +23,7 @@ of the pipeline — see below.
 ## Directory roles (do not blur these)
 
 - `org_files/` — unmodified original files this pipeline replaces or
-  patches: the five `.HSQ` files, plus `DUNEPRG.EXE` (patched in place by
+  patches: the six `.HSQ` files, plus `DUNEPRG.EXE` (patched in place by
   `patch_location_name_order.py`/`patch_rtl_engine.py`, never copied from
   `build/`, so it needs its own pristine reference here too). Identified
   and repaired by **content hash**, never by filename.

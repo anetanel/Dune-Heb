@@ -45,11 +45,39 @@ verification loop works):
                                 one byte repeated (-R)+1 times (R negative)
                                 or (R)+1 literal bytes (R non-negative).
 
-All widths this pipeline deals with are 320 (the full VGA mode-13h width),
-which is always a multiple of 4 -- so the row-realignment padding some
-implementations insert between rows never actually triggers here, and this
-module doesn't implement it. Don't reuse encode_sprite() for a width that
-isn't a multiple of 4 without adding that padding back.
+encode_sprite() supports arbitrary widths (not just multiples of 4), needed
+for GENERIC.HSQ's individual letter-glyph sprites (patch_generic_letters.py)
+which are rarely 4-aligned (e.g. 21px wide), unlike INTDS.HSQ's picture
+sprites (always the full 320px VGA width). This requires per-row padding,
+and the padding granularity differs by path -- confirmed by round-tripping
+real sprite bytes (see verify_bigs_sprite_roundtrip.py) rather than assumed:
+
+decode_sprite_pixels()'s row-boundary check (`if x >= w: x = 0; y += 1`)
+runs once per outer-loop iteration -- once per RLE token in compressed mode
+(a token can emit several nibbles from repeated/literal bytes), once per
+fixed 4-nibble/2-byte read in uncompressed mode -- not once per pixel. If a
+token/read would carry x past w before finishing, put()'s own `x < w` guard
+silently drops the overflow pixels, and the *next* row starts fresh at x=0
+regardless of how far past w that overflow went. So an encoder must ensure
+no token/read ever straddles a real row boundary:
+  - compressed: each row is already packed independently via _pack_row (one
+    call per row) below, and every token _pack_row emits always represents
+    a whole number of *bytes* (2 nibbles/byte -- see _pack_row), so an
+    intermediate token boundary can only ever land on an even nibble count.
+    Padding an odd-width row with one extra 0 nibble (making it even) is
+    therefore sufficient: real width w is either already even (no padding,
+    unchanged from before) or odd (only even boundary >= w is w+1, which is
+    guaranteed to be the row's own final token -- never a false trigger
+    partway through).
+  - uncompressed: decode always reads a fixed 4-nibble granule with no
+    awareness of row boundaries in the byte stream itself, so each row must
+    be padded to the next multiple of 4 nibbles (0-3 padding nibbles) before
+    packing, so that granule boundaries land exactly on row boundaries.
+    Padding to only "even" here is insufficient (verified: e.g. a mult-of-2-
+    but-not-4 width like 18 decodes wrong) -- the granule is 4 nibbles, not
+    2, on this path.
+Both paddings reduce to a no-op for any width already a multiple of 4 (e.g.
+INTDS's 320), so encode_sprite()'s output for existing callers is unchanged.
 """
 
 import struct
@@ -186,19 +214,28 @@ def _pack_row(nibbles):
     return bytes(out)
 
 
+def _pad_row(nibbles, multiple):
+    """Pads a row's nibble list with trailing 0s up to the next multiple of
+    `multiple` nibbles. See module docstring for why the two encode_sprite()
+    paths below need different padding granularities.
+    """
+    pad = (-len(nibbles)) % multiple
+    return list(nibbles) + [0] * pad if pad else nibbles
+
+
 def encode_sprite(nibble_grid, width, height, palbase, compressed=True):
     """Encode a nibble grid (list of `height` rows, each `width` nibbles
-    0-15) into a full sprite block: 4-byte header + pixel data. `width`
-    must be a multiple of 4 (see module docstring re: row padding).
+    0-15) into a full sprite block: 4-byte header + pixel data. `width` can
+    be any value >= 1 (see module docstring re: per-row padding).
     """
-    assert width % 4 == 0, "width must be a multiple of 4 (no row-padding support)"
     if compressed:
-        body = b"".join(_pack_row(row) for row in nibble_grid)
+        body = b"".join(_pack_row(_pad_row(row, 2)) for row in nibble_grid)
     else:
         body = bytearray()
         for row in nibble_grid:
-            for i in range(0, width, 2):
-                body.append((row[i] & 0x0F) | ((row[i + 1] & 0x0F) << 4))
+            padded = _pad_row(row, 4)
+            for i in range(0, len(padded), 2):
+                body.append((padded[i] & 0x0F) | ((padded[i + 1] & 0x0F) << 4))
         body = bytes(body)
 
     width_hi = (width >> 8) & 0x7F
