@@ -352,8 +352,28 @@ def ensure_english_txt(name):
 # segment AFTER M on the top row, so the source now puts the sentence that
 # should read first (top) after the M and the closing sentence (bottom)
 # before it.
+#
+# 175-179 were never individually confirmed in-game -- the range(175, 181)
+# above came from widening an original {175, 180} pair (only 175 and 180
+# were ever actually tested) on the unverified assumption that the whole
+# block of consecutive Harkonnen-victory/defeat epilogue lines shares
+# 180's draw path. 178 (translator's 1-based line 179, "נכנס לאזור
+# הארקונן / **** אזהרה ****" -- the ornithopter screen's "entering
+# Harkonnen airspace / WARNING" banner) has since failed that assumption
+# and is excluded below, falling back to ordinary pre-reversed treatment:
+# reported on-screen as "**** הרהזא ****" -- each word's letters mirrored
+# in place while word order and the symmetric "****" stayed put. That's
+# the signature of natural-order source hitting the plain LTR menu draw
+# path instead of the RTL-native draw_subtitle_body path (same failure
+# mode as the reverted occupation/duration/skill-rank substitutions):
+# drawing memory-order bytes left-to-right and then reading the result
+# RTL mirrors each character run in place.
+#
+# 176/177/179 remain natural, still unconfirmed either way -- worth an
+# in-game check if any is ever seen on screen.
 COMMAND1_NATURAL_LINES = (
-    set(range(267, 275)) | {73, 74, 76} | set(range(175, 181)) | {230, 231, 232, 233, 234, 235, 237, 244, 245}
+    set(range(267, 275)) | {73, 74, 76} | (set(range(175, 181)) - {178})
+    | {230, 231, 232, 233, 234, 235, 237, 244, 245}
 )
 
 
