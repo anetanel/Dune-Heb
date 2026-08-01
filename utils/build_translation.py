@@ -30,21 +30,26 @@ this repo). The pipeline then:
      patch_generic_letters.py -- glyph *shapes* only, the outro's
      underlying text still selects these slots by their original English
      letter identities)
-  6. copies the results from build/ into game/, overwriting the originals
-  7. resets game/DUNEPRG.EXE from the hash-verified org_files/ copy, then
+  6. regenerates the outro's "THE END" / "with (in order of Appearance)"
+     picture sprites inside build/FINAL.HSQ with hand-authored Hebrew
+     replacements (always re-run, see patch_final_credits.py -- reads
+     final_png/*.png if present, otherwise leaves that sprite as the
+     original English art untouched)
+  7. copies the results from build/ into game/, overwriting the originals
+  8. resets game/DUNEPRG.EXE from the hash-verified org_files/ copy, then
      patches it so map/globe location names (e.g. area + sietch) draw in
      RTL-correct order (backs up the pristine copy on first run). The
      reset always runs first -- the EXE is patched in place and its edits
      would otherwise accumulate across builds, silently preserving a patch
      a later commit had already removed from the codebase (this bit us
      once with the book page-exhaustion credits-block patch)
-  8. patches game/DUNEPRG.EXE so dialogue/subtitle text renders Hebrew
+  9. patches game/DUNEPRG.EXE so dialogue/subtitle text renders Hebrew
      natively right-to-left (idempotent, see patch_rtl_engine.py --
      EXPERIMENTAL; wired in here specifically so a from-scratch game/
      restore can't silently drop it, as happened once during development)
-  9. makes sure game/DUNE.BAT launches step 8's RTL cave TSR
+  10. makes sure game/DUNE.BAT launches step 9's RTL cave TSR
      (game/DUNETSR.COM) via `LH` (LOADHIGH) before duneprg runs --
-     required for step 8's patches to have safe memory (idempotent;
+     required for step 9's patches to have safe memory (idempotent;
      game/ is gitignored so this can't be shipped as a committed file,
      must be re-applied every build)
 """
@@ -56,6 +61,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import patch_final_credits
 import patch_generic_letters
 import patch_intro_logo
 import patch_intro_title
@@ -95,6 +101,7 @@ EXPECTED_MD5 = {
     "PHRASE12.HSQ": "46150b9b41dc8528602e422c20a86a9c",
     "INTDS.HSQ": "aac0e6cb4af3626c88316b60d9a8c918",
     "GENERIC.HSQ": "592ad4bebdc8870012f71addf7dbab88",
+    "FINAL.HSQ": "cb4e7a5ef6f222ce9f01d202b13774e0",
     "DUNEPRG.EXE": "b716adaedab07867672624f740076336",
 }
 
@@ -444,35 +451,38 @@ def main():
 
     check_game_dir_populated()
 
-    print("[1/10] verifying org_files/")
+    print("[1/11] verifying org_files/")
     ensure_org_files()
 
-    print("[2/10] building Hebrew font")
+    print("[2/11] building Hebrew font")
     font_hsq = build_font(rebuild=args.rebuild_font)
 
-    print("[3/10] building translated phrase/command files")
+    print("[3/11] building translated phrase/command files")
     phrase_files = build_phrases()  # extracts each <NAME>.TXT into tmp/ as needed
 
-    print("[4/10] regenerating intro title card (INTDS.HSQ)")
+    print("[4/11] regenerating intro title card (INTDS.HSQ)")
     intro_title_hsq, _intro_title_height = patch_intro_title.build()
     intro_title_hsq, _intro_logo_height = patch_intro_logo.build()
 
-    print("[5/10] regenerating outro letter sprites (GENERIC.HSQ)")
+    print("[5/11] regenerating outro letter sprites (GENERIC.HSQ)")
     generic_hsq = patch_generic_letters.build()
 
-    print("[6/10] installing into game/")
-    install_to_game([font_hsq, intro_title_hsq, generic_hsq] + phrase_files)
+    print("[6/11] regenerating outro credit screens (FINAL.HSQ)")
+    final_hsq = patch_final_credits.build()
 
-    print("[7/10] resetting game/DUNEPRG.EXE to pristine before patching")
+    print("[7/11] installing into game/")
+    install_to_game([font_hsq, intro_title_hsq, generic_hsq, final_hsq] + phrase_files)
+
+    print("[8/11] resetting game/DUNEPRG.EXE to pristine before patching")
     reset_game_exe()
 
-    print("[8/10] patching game/DUNEPRG.EXE location-name draw order")
+    print("[9/11] patching game/DUNEPRG.EXE location-name draw order")
     patch_location_name_order.apply_patches(GAME_DIR / patch_location_name_order.EXE_NAME)
 
-    print("[9/10] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
+    print("[10/11] patching game/DUNEPRG.EXE for native RTL dialogue rendering")
     patch_rtl_engine.apply_patches(GAME_DIR / patch_rtl_engine.EXE_NAME)
 
-    print("[10/10] ensuring game launcher .BAT launches the RTL cave TSR")
+    print("[11/11] ensuring game launcher .BAT launches the RTL cave TSR")
     ensure_launcher_bat_launches_tsr()
 
     print("Done.")

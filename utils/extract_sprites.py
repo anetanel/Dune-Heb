@@ -94,7 +94,7 @@ KNOWN_NON_SPRITE = {
 
 def source_path(name):
     """org_files/ has the pristine original for anything the translation
-    pipeline touches (currently INTDS/DUNECHAR/GENERIC among picture
+    pipeline touches (currently INTDS/DUNECHAR/GENERIC/FINAL among picture
     files); game/ is untouched-original for everything else."""
     org = os.path.join(REPO_ROOT, "org_files", f"{name}.HSQ")
     if os.path.exists(org):
