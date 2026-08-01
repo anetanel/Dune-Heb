@@ -1,8 +1,9 @@
 # Copy your own legally-obtained Dune (1992) install into this directory.
 #
-# The build pipeline (utils/build_translation.py) expects at least:
-#   - DUNEPRG.EXE
-#   - COMMAND1.HSQ, DUNECHAR.HSQ, PHRASE11.HSQ, PHRASE12.HSQ (or their .BAK equivalents)
+# The build pipeline (utils/build_translation.py) expects a full original
+# install -- DUNEPRG.EXE and every original .HSQ file this pipeline
+# touches: COMMAND1, DUNECHAR, PHRASE11, PHRASE12, INTDS, GENERIC, FINAL
+# (or their .BAK equivalents).
 #
 # See README.md for setup instructions. This file only exists to keep
 # game/ present in a fresh checkout -- everything else you place here is
