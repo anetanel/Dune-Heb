@@ -108,6 +108,8 @@ This extracts the matching `tmp/<NAME>.TXT` automatically if it isn't
 already present. Output lands in `build/<NAME>.HSQ`; run `utils/build_translation.py`
 afterward to install it into `game/`.
 
+
+Hebrew book pdf for references: https://ms.1lib.sk/book/6ZezENwDOa/%D7%97%D7%95%D7%9C%D7%99%D7%AA.html
 ## How a build is assembled
 
 `./utils/build_translation.py` runs these steps in order every time
