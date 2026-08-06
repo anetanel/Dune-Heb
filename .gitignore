@@ -40,3 +40,4 @@ __pycache__/
 
 # Packaged game zip (utils/package_dune_zip.py output; regenerate on demand)
 /DUNE.zip
+/DUNE.zip.txt

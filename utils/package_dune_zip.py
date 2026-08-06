@@ -9,7 +9,7 @@ import zipfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 GAME_DIR = REPO_ROOT / "game"
-OUT_ZIP = REPO_ROOT / "DUNE.zip"
+OUT_ZIP = REPO_ROOT / "DUNE.zip.txt"
 
 EXCLUDE_NAMES = {".gitkeep", ".DS_Store"}
 EXCLUDE_SUFFIXES = {".SAV", ".orig-backup"}
